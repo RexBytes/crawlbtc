@@ -90,6 +90,7 @@ crawlbtc diagnose           # full health report (db, node, P2PK coverage, index
 crawlbtc backfill-vins      # repair pass (only needed for verbosity-2 nodes / legacy data)
 crawlbtc requeue --phase vout --skipped     # reset blocks for reprocessing
 crawlbtc recompute-balances                 # exact watch_addresses rebuild from io/spends
+crawlbtc build-balances     # materialize EVERY address's balance into blockchain.address_balances
 ```
 
 `-P/--processes`, `-w/--workers`, `-b/--batch-size` override the auto-sizing
@@ -124,6 +125,16 @@ crawlbtc recompute-balances                 # rebuild watch_addresses exactly
 
 Run `crawlbtc diagnose` first — it samples early blocks, checks for the
 known genesis-era addresses, and tells you exactly what needs requeueing.
+
+### Address balances
+
+Two models, both derived purely from `transaction_io` + `spends` (no node):
+
+- `watch_addresses` — a curated set you actively track; `scan-addresses`
+  keeps it current incrementally, `recompute-balances` rebuilds it exactly.
+- `blockchain.address_balances` — every address on the chain, materialized
+  by `crawlbtc build-balances` (full rebuild; a large batch job on a
+  full-chain database). Includes balance, UTXO count, total received/spent.
 
 ## 🧪 Tests
 

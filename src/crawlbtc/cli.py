@@ -214,6 +214,66 @@ UPDATE blockchain.watch_addresses wa
 """
 
 
+_BUILD_BALANCES_SQL = """
+INSERT INTO blockchain.address_balances
+    (address, address_type, balance_sats, utxo_count,
+     total_received_sats, total_spent_sats, updated_at)
+SELECT i.address,
+       MAX(i.address_type)                                        AS address_type,
+       COALESCE(SUM(i.amount) FILTER (WHERE s.prev_txid IS NULL), 0) AS balance_sats,
+       COUNT(*) FILTER (WHERE s.prev_txid IS NULL)                AS utxo_count,
+       COALESCE(SUM(i.amount), 0)                                 AS total_received_sats,
+       COALESCE(SUM(i.amount) FILTER (WHERE s.prev_txid IS NOT NULL), 0) AS total_spent_sats,
+       now()
+  FROM blockchain.transaction_io i
+  LEFT JOIN blockchain.spends s
+    ON s.prev_txid = i.txid AND s.prev_vout = i.idx
+ WHERE i.io_type = 'out'::blockchain.tx_io_type
+   AND i.address IS NOT NULL
+ GROUP BY i.address;
+"""
+
+
+def cmd_build_balances(args, cfg):
+    """Materialize the balance of EVERY address into blockchain.address_balances.
+
+    Pure SQL over transaction_io + spends; no node needed. Full rebuild each
+    run (truncate + insert) so it is always exact and idempotent. On a
+    full-chain database this is a big batch job - expect hours, and make
+    sure there is temp disk headroom for the aggregation spill.
+    """
+    with _connect(cfg) as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS blockchain.address_balances (
+                address text PRIMARY KEY,
+                address_type blockchain.address_type,
+                balance_sats bigint NOT NULL,
+                utxo_count integer NOT NULL,
+                total_received_sats bigint NOT NULL,
+                total_spent_sats bigint NOT NULL,
+                updated_at timestamp with time zone DEFAULT now() NOT NULL
+            );
+        """)
+        cur.execute("SET statement_timeout = 0;")
+        cur.execute("SELECT set_config('work_mem', %s, false);", (args.work_mem,))
+        print("rebuilding blockchain.address_balances (full pass over transaction_io)...")
+        cur.execute("BEGIN;")
+        cur.execute("TRUNCATE blockchain.address_balances;")
+        cur.execute(_BUILD_BALANCES_SQL)
+        count = cur.rowcount
+        cur.execute("COMMIT;")
+        print(f"built balances for {count:,} addresses")
+        cur.execute("""
+            SELECT COUNT(*) FILTER (WHERE balance_sats > 0),
+                   COALESCE(SUM(balance_sats), 0)
+            FROM blockchain.address_balances;
+        """)
+        funded, total = cur.fetchone()
+        print(f"addresses with balance > 0: {funded:,}; total tracked: {total:,} sats "
+              f"({total / 100_000_000:,.2f} BTC)")
+
+
 def cmd_recompute_balances(args, cfg):
     """Exact rebuild of watch_addresses balances from transaction_io + spends.
 
@@ -281,6 +341,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("recompute-balances",
                        help="exact rebuild of watch_addresses balances from io/spends data")
     p.set_defaults(func=cmd_recompute_balances, needs_probe=False)
+
+    p = sub.add_parser("build-balances",
+                       help="materialize balances for EVERY address into blockchain.address_balances")
+    p.add_argument("--work-mem", default="1GB", metavar="SIZE",
+                   help="session work_mem for the aggregation (default 1GB)")
+    p.set_defaults(func=cmd_build_balances, needs_probe=False)
 
     return parser
 
