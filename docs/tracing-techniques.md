@@ -291,6 +291,40 @@ Do not trace *through* these naively; detect, flag, and report them.
 - **CoinSwap / atomic swaps, Taproot-based protocols**: designed to look
   like ordinary payments; treat "we can always trace" claims skeptically.
 
+## 5a. Fiat valuation (what was it worth when it moved)
+
+Counsel almost always wants amounts in GBP/USD *at the time of each
+transaction*, not today's price - for pleading loss, quantifying unjust
+enrichment, and jurisdictional thresholds. This needs one external input:
+a historical BTC price series.
+
+Planned shape (`crawlbtc import-prices` + a valuation column/view):
+
+- **Price table**: `blockchain.btc_prices (ts timestamptz, currency text,
+  price numeric, source text, PRIMARY KEY (ts, currency))`. Daily is the
+  usual evidentiary granularity; hourly if a case needs it.
+- **Import**: `crawlbtc import-prices --currency GBP --csv <file>` (and/or
+  a pull from a chosen public reference series). Keep `source` per row so
+  the provenance of every valuation is citable - courts ask where the
+  price came from.
+- **Valuation at time of tx**: join a transaction's `received_time` to the
+  price row at/just before it (`ORDER BY ts DESC LIMIT 1` per tx, or a
+  daily-bucket join). Expose as a view over `transactions`, or materialize
+  `value_fiat` alongside `total_out` for speed.
+- **Reporting rules**: record the exact price, its timestamp, currency and
+  source for each valued hop; state the reference series in the report's
+  methodology. Never retroactively value at current price unless the claim
+  is specifically about present-day value - mixing the two is a common and
+  damaging error.
+- **Multiple currencies / rate at report date**: keep the table
+  multi-currency; also capture a single "as of report date" rate when a
+  filing needs both historical and current figures.
+
+Caveats to disclose: a single daily close hides intraday volatility (note
+the day's range for large sums); illiquid early-era prices (pre-2011) are
+thin and should be flagged as low-confidence; pick one reputable reference
+series and stay consistent across a matter.
+
 ## 6. Reporting standards for legal use
 
 - **Reproducibility**: every trace should be re-derivable from the
@@ -324,7 +358,8 @@ Do not trace *through* these naively; detect, flag, and report them.
 | Amount+timing gap correlation | `transactions` amounts/times | data ready; materialize + score candidate pairs |
 | Wallet fingerprinting | tx version/locktime/RBF | **schema addition + re-extract** |
 | Entity tags | `watch_addresses.tags` | store exists; needs curation/import |
-| Fiat valuation at time of tx | external price series table | external data to import |
+| Price import (`import-prices`) | `blockchain.btc_prices` table + CSV/API loader | planned; see 5a |
+| Fiat valuation at time of tx | price table + join on `received_time` | planned; view or `value_fiat` column, per 5a |
 
 ## References
 
