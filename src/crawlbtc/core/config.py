@@ -58,6 +58,7 @@ class Config:
     job_batch_size: int
     db_pool_timeout: float
     start_delay: float
+    synchronous_commit: str = "off"
 
 
 def probe_server_capacity(conninfo: str) -> tuple[int, int]:
@@ -141,4 +142,9 @@ def load_config(
         job_batch_size=batch_size if batch_size is not None else int(os.getenv("JOB_BATCH_SIZE", "1")),
         db_pool_timeout=float(os.getenv("DB_POOL_TIMEOUT", "60")),
         start_delay=float(os.getenv("START_DELAY", "0")),
+        # Safe for this pipeline: job status commits atomically with the
+        # data, so a crash that loses the tail commits just leaves those
+        # blocks pending for reprocessing. Set to "on" to restore full
+        # durability waits.
+        synchronous_commit=os.getenv("PG_SYNCHRONOUS_COMMIT", "off"),
     )

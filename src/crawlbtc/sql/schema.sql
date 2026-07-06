@@ -122,6 +122,17 @@ DO $$ BEGIN
     FOR EACH ROW EXECUTE FUNCTION blockchain.touch_updated_at();
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+-- Materialized every-address balances, rebuilt by `crawlbtc build-balances`.
+CREATE TABLE IF NOT EXISTS blockchain.address_balances (
+    address text PRIMARY KEY,
+    address_type blockchain.address_type,
+    balance_sats bigint NOT NULL,
+    utxo_count integer NOT NULL,
+    total_received_sats bigint NOT NULL,
+    total_spent_sats bigint NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
 -- Minimal index set: every remaining index earns its write cost.
 CREATE INDEX IF NOT EXISTS block_jobs_vout_sched_idx ON blockchain.block_jobs (height)
     WHERE vout_status = 'pending';
