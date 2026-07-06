@@ -87,6 +87,10 @@ crawlbtc run-all            # extract -> backfill-vins -> scan-addresses
 crawlbtc status             # per-phase job counts
 crawlbtc diagnose           # full health report (db, node, P2PK coverage, index audit)
 
+crawlbtc config             # show every config source (env file, bitcoin.conf, postgres)
+crawlbtc config backup      # snapshot those configs to a timestamped dir
+crawlbtc config restore DIR # restore env/bitcoin.conf (dry-run; add --force to write)
+
 crawlbtc backfill-vins      # repair pass (only needed for verbosity-2 nodes / legacy data)
 crawlbtc requeue --phase vout --skipped     # reset blocks for reprocessing
 crawlbtc recompute-balances                 # exact watch_addresses rebuild from io/spends

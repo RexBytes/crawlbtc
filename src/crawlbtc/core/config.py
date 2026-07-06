@@ -74,6 +74,16 @@ def probe_server_capacity(conninfo: str) -> tuple[int, int]:
         return 100, 3  # safe-ish fallback
 
 
+def resolve_env_file(env_file: Optional[str] = None) -> Optional[str]:
+    """Return the absolute path of the env file load_config() would use,
+    or None if it would fall back to the process environment only."""
+    env_file = env_file or os.getenv("CRAWLBTC_ENV_FILE")
+    if env_file:
+        return os.path.abspath(os.path.expanduser(env_file))
+    found = find_dotenv(usecwd=True)
+    return found or None
+
+
 def load_config(
     processes: Optional[int] = None,
     workers: Optional[int] = None,
