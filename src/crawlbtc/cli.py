@@ -48,10 +48,19 @@ def cmd_migrate(args, cfg):
             print(f"-- {p.name}")
             print(p.read_text())
         return
-    with _connect(cfg) as conn:
-        for p in migration_files:
-            print(f"applying {p.name} ...")
-            conn.execute(p.read_text())
+    try:
+        with _connect(cfg) as conn:
+            for p in migration_files:
+                print(f"applying {p.name} ...")
+                conn.execute(p.read_text())
+    except psycopg.errors.InsufficientPrivilege as e:
+        print(f"\npermission denied: {e}", file=sys.stderr)
+        print("migrations alter types/indexes, which requires their OWNER "
+              "(usually your admin role, not the app role).", file=sys.stderr)
+        print("run once as admin, either:", file=sys.stderr)
+        print("  PG_USER=pgadmin PG_PASSWORD=... crawlbtc migrate", file=sys.stderr)
+        print("  crawlbtc migrate --show-sql | psql -h <host> -U pgadmin -d <db>", file=sys.stderr)
+        sys.exit(1)
     print("migrations applied")
 
 
