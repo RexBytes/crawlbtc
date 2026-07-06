@@ -151,6 +151,27 @@ Spending-hour histograms (time zone inference), periodicity (payroll,
 scheduled sweeps), co-spending across time. Corroborating evidence, not
 primary.
 
+### 2.5 Address reuse (deterministic hard link)
+The strongest linkage there is, and trivially in the schema: the same
+address appearing on multiple transactions is the same script, i.e. the
+same controlling key(s). Not a heuristic - confidence 1.0 (barring key
+compromise/loss, which is the rare edge case to note). `GROUP BY address`
+over `transaction_io` gives the full reuse graph for free. Reuse is also
+what makes many change guesses certain (2.2, "no self-transition").
+
+### 2.6 Dusting-attack linkage
+An adversary (or an analyst) sends tiny amounts ("dust") to many
+addresses; when a victim later spends that dust *alongside* their real
+UTXOs, the common-input heuristic (2.1) fuses the previously separate
+addresses. Two uses:
+- **Detect it against your target**: flag received sub-economic outputs
+  (amount below the dust threshold, ~546 sats for p2pkh). A cluster that
+  only merged *because* of a dust input is a weaker merge - annotate it.
+- **Use it**: unspent dust you can attribute is a latent tag - if it is
+  ever co-spent you learn a new address of the target.
+Detectable directly: `transaction_io` outputs with `amount` below
+threshold, then watch for their spend edges in `spends`.
+
 ## 3. Value attribution within a transaction (taint models)
 
 Where the "probability analysis" lives. All are *conventions* - state
@@ -169,6 +190,27 @@ then FIFO + haircut + change-aware on the candidate paths, and report
 where they agree/diverge. Agreement across models is a strong statement;
 divergence is honest uncertainty.
 
+### 3.1 Transaction entropy / linkability score (Boltzmann)
+Rather than *guess* the input->output mapping, *quantify how ambiguous it
+is*. Enumerate the input/output partitions whose amounts balance
+(subset-sum); the count of valid interpretations is the transaction's
+linkability entropy (LaurentMT's Boltzmann analysis). This is the
+principled confidence number for Question B (section 0a):
+- **entropy 0** (one valid mapping, e.g. 1-in/1-out or 2-out with a unique
+  fit) -> attribution is effectively deterministic.
+- **high entropy** (a CoinJoin with many equal outputs) -> attribution is
+  genuinely 1/N; report it as such.
+Compute per transaction from `transaction_io` amounts; cache as a column.
+It doubles as an objective CoinJoin detector and as the per-hop weight in
+path scoring.
+
+### 3.2 Subset-sum input<->output attribution
+The flip side of 3.1: when the amounts admit exactly one balancing
+partition, the input->output mapping is *uniquely determined* even in a
+multi-party transaction - attribution becomes fact, not heuristic. Worth
+running before falling back to change heuristics; it resolves a
+meaningful fraction of 2-3 output transactions outright.
+
 ## 4. Entity identification (turning clusters into names)
 
 - **Tag database**: label known addresses/clusters - exchange deposit and
@@ -184,6 +226,34 @@ divergence is honest uncertainty.
 - **OSINT**: reused addresses posted publicly (forums, invoices, court
   records, breach dumps), vanity addresses, dust-attack responses.
 - **Counterparty inference**: repeated interaction with a labeled cluster.
+- **Topological hub detection (unsupervised)**: even without labels, a
+  cluster's graph shape betrays its role. Very high in/out degree,
+  fan-in-then-fan-out, and constant balance turnover mark *services*
+  (exchanges, mixers, processors). Compute cluster degree/centrality from
+  `spends` + the cluster table to auto-flag "likely service" nodes -
+  these are exactly the trace-terminating points and subpoena targets, so
+  finding them without waiting for a manual tag is high value.
+- **Exchange hot/cold-wallet flows**: services periodically sweep deposits
+  to cold storage in large round consolidations; recognizing that pattern
+  separates internal service plumbing from user activity.
+
+## 4a. Provenance / source-of-funds (backward tracing)
+
+For legal work, proving where value *came from* is often as important as
+where it went (unjust enrichment, tracing stolen funds into a defendant's
+hands, freezing orders). The graph is bidirectional - the same `spends`
+traversal run backward answers it:
+- **Origin walk**: from a UTXO, walk `spending_txid -> inputs` backward to
+  find funding sources, terminating at coinbases or known-entity clusters.
+- **First-funding / "sudden wealth"**: the earliest inbound transaction to
+  a cluster, and its counterparty, often identifies onboarding (which
+  exchange funded the wallet).
+- **Coinbase provenance**: coins traceable back to a specific coinbase
+  carry mining origin - relevant for age/legitimacy arguments.
+- **Coin age / Coin Days Destroyed**: value x (days since last moved),
+  summed over inputs. Dormant coins suddenly moving is a strong event
+  signal (old theft cashing out, key compromise, estate movement).
+  Computable from `spends.spent_time` vs each input's creation time.
 
 ## 5. Obfuscation recognition (know when confidence collapses)
 
@@ -206,6 +276,13 @@ Do not trace *through* these naively; detect, flag, and report them.
   re-emerges unlinked; on-chain linkage is genuinely broken - timing and
   amount correlation sometimes helps; legal process against the operator
   (where possible) works better.
+- **Amount + timing correlation across gaps** (the standard bridge for
+  mixer/exchange/chain-hop breaks): match a withdrawal to a deposit by
+  value (minus plausible fee) within a time window. One match is weak;
+  repeated correlated pairs, or a distinctive non-round amount, can raise
+  it to a strong probabilistic link. Fully computable from `transactions`
+  (amounts, times) - materialize candidate deposit/withdrawal pairs and
+  score them. Report as probabilistic, never as certainty.
 - **Chain-hopping**: swap to another chain via an exchange or bridge and
   back. On-chain trace terminates at the service; correlate timing and
   amounts across chains, then use legal process on the service.
@@ -235,9 +312,16 @@ Do not trace *through* these naively; detect, flag, and report them.
 |---|---|---|
 | Graph traversal / `trace` command | `spends` | data ready; CLI command to build |
 | `trace` branch-selection (Question B) | change signals in 2.2 + per-hop confidence output | data ready; ranks onward path with scores, flags mixers |
+| Backward provenance / source-of-funds | `spends` traversed in reverse | data ready; same engine as `trace`, reversed |
 | Cluster table (`build-clusters`) | union-find over input co-occurrence | data ready; batch job to build |
+| Address-reuse graph | `transaction_io` group-by address | data ready (deterministic) |
 | Change-detection scoring | `transaction_io` (idx, address_type, amounts), address first-seen | data ready |
+| Transaction entropy / subset-sum (Boltzmann) | `transaction_io` amounts | data ready; per-tx computation, cache as column |
 | CoinJoin/peel-chain flags | per-tx output shape | data ready; flag column or view |
+| Dusting-attack flags | `transaction_io` amounts vs dust threshold | data ready |
+| Topological hub/service detection | cluster table + `spends` degree/centrality | data ready once clusters exist |
+| Coin-age / Coin Days Destroyed | `spends.spent_time` vs input creation time | data ready |
+| Amount+timing gap correlation | `transactions` amounts/times | data ready; materialize + score candidate pairs |
 | Wallet fingerprinting | tx version/locktime/RBF | **schema addition + re-extract** |
 | Entity tags | `watch_addresses.tags` | store exists; needs curation/import |
 | Fiat valuation at time of tx | external price series table | external data to import |
