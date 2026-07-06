@@ -198,15 +198,30 @@ def run_diagnose(cfg: Config) -> str:
         lines.append("features        " + ", ".join(f"{f}={c:,}" for f, c in cur.fetchall()))
 
         _section(lines, "SATOSHI-ERA (P2PK) COVERAGE")
+        # Coinbases were paid to raw pubkeys (P2PK) by default until Bitcoin
+        # Core 0.8.2 (mid-2013, ~height 240k). The legacy extractor dropped
+        # address-less outputs, so P2PK-only blocks were filed as
+        # op_return_only/none/vin, and mixed early blocks are missing their
+        # coinbase rows even though they look 'done'.
+        cur.execute("""
+            SELECT COUNT(*) FILTER (WHERE features IN ('op_return_only', 'none', 'vin')),
+                   COUNT(*) FILTER (WHERE vout_status IN ('skipped', 'failed'))
+            FROM blockchain.block_jobs;
+        """)
+        p2pk_suspect, skipped_failed = cur.fetchone()
         cur.execute("""
             SELECT COUNT(*) FROM blockchain.block_jobs
-            WHERE height < 200000 AND (vout_status = 'skipped' OR features IN ('none', 'coinbase_only'));
+            WHERE height < 260000 AND features IN ('both', 'vout');
         """)
-        p2pk_gap = cur.fetchone()[0]
-        lines.append(f"early blocks (<200k) skipped or empty-featured: {p2pk_gap:,}")
-        if p2pk_gap:
-            lines.append("-> these are almost certainly P2PK-only blocks the legacy extractor dropped;")
-            lines.append("   fix with: crawlbtc requeue --phase vout --skipped  (then run extract)")
+        early_done = cur.fetchone()[0]
+        lines.append(f"blocks with addressless-output features (op_return_only/none/vin): {p2pk_suspect:,}")
+        lines.append(f"blocks skipped or failed: {skipped_failed:,}")
+        lines.append(f"early blocks (<260k) marked done that may still miss P2PK coinbase rows: {early_done:,}")
+        if p2pk_suspect or early_done:
+            lines.append("-> to pick up Satoshi-era coins:")
+            lines.append("   crawlbtc requeue --phase vout --from 0 --to 260000")
+            lines.append("   crawlbtc requeue --phase vout --features op_return_only,none,vin --failed --skipped")
+            lines.append("   crawlbtc extract   (idempotent: only missing rows are added)")
         if "p2pk" in enum_vals:
             # Existence probe; time-boxed since address_type has no index.
             try:
