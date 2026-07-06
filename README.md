@@ -136,6 +136,13 @@ Two models, both derived purely from `transaction_io` + `spends` (no node):
   by `crawlbtc build-balances` (full rebuild; a large batch job on a
   full-chain database). Includes balance, UTXO count, total received/spent.
 
+## 💾 Disk space
+
+A full-chain database is several TB. When space gets tight, see
+[docs/reclaiming-space.md](docs/reclaiming-space.md) for ordered,
+tested-tradeoff measures (unused PK indexes ~250 GB, node pruning
+~700 GB, txid bytea conversion ~1.5-2 TB) and the preconditions for each.
+
 ## 🧪 Tests
 
 ```bash
