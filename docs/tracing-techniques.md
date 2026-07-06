@@ -27,6 +27,64 @@ A defensible report keeps these layers visibly separate.
 
 ---
 
+## 0a. "Did they move the coins, and where to?" - split the question
+
+The most common client question ("the target held X BTC here - where did
+it go?") is really two questions of very different difficulty. Blurring
+them is the main way tracing gets misrepresented, in both directions.
+
+### Question A - did the coins move, and into which transaction?
+**Deterministic. Trivial.** An output either has a row in
+`blockchain.spends` (moved - and you see exactly which transaction
+consumed it, at which height and time) or it does not (still unspent).
+No heuristic. Every departure from an address:
+
+```sql
+SELECT s.spending_txid, s.spent_height, s.spent_time
+  FROM blockchain.spends s
+  JOIN blockchain.transaction_io i
+    ON i.txid = s.prev_txid AND i.idx = s.prev_vout
+ WHERE i.address = %(address)s AND i.io_type = 'out';
+```
+
+Movement itself is provable to an evidentiary standard. You can follow
+every hop with certainty *as far as the coins travel* - the certainty is
+in the edges; the only question is which edge to follow at a fork.
+
+### Question B - which output is *their* onward coin vs a payment to someone else?
+This is the hard part, and it is narrower than "we can't tell if they
+moved funds." It is exactly the change-identification problem (section
+2.2). The movement is certain; the ambiguity is only branch selection at
+each multi-output hop. In practice it is usually resolvable, because the
+common cases are simple:
+
+- **Whole-balance sweep** (flee/consolidate to a new wallet): often one
+  input, one output -> **zero ambiguity**. Very common.
+- **Self-transfer / consolidation**: several of their own addresses into
+  one new address -> common-input heuristic ties it, near-certain.
+- **Ordinary payment with change**: two outputs; the change signals in
+  2.2 usually pick the onward (change) branch with high confidence.
+
+Genuinely hard only in deliberate-obfuscation cases (CoinJoin, custodial
+mixer, chain-hop through an exchange - section 5). There the honest
+result is "trail reaches <service/mix>; here are the candidate successors
+and the legal process to pierce it." That is the true state of knowledge,
+not a gap in the data.
+
+### Framing for clients / counsel
+- *Movement* is provable.
+- *Destination through ordinary wallets* is traceable, with stated
+  per-hop confidence.
+- *Destination through a mixer/exchange* terminates at the service and
+  converts into a legal-process question (subpoena / disclosure order).
+
+Difficulty scales with how hard the target worked to hide. A target who
+simply moved coins to a fresh address - the majority - is fully
+traceable. Overstating certainty through a mixer, or understating it for
+a plain sweep, are both failures; match the claim to the case.
+
+---
+
 ## 1. Deterministic graph traversal
 
 The foundation. Forward ("where did the coins go") and backward ("where
@@ -176,6 +234,7 @@ Do not trace *through* these naively; detect, flag, and report them.
 | Piece | Needs | Status |
 |---|---|---|
 | Graph traversal / `trace` command | `spends` | data ready; CLI command to build |
+| `trace` branch-selection (Question B) | change signals in 2.2 + per-hop confidence output | data ready; ranks onward path with scores, flags mixers |
 | Cluster table (`build-clusters`) | union-find over input co-occurrence | data ready; batch job to build |
 | Change-detection scoring | `transaction_io` (idx, address_type, amounts), address first-seen | data ready |
 | CoinJoin/peel-chain flags | per-tx output shape | data ready; flag column or view |
