@@ -1,0 +1,16 @@
+-- SCHEMA: blockchain
+
+-- DROP SCHEMA IF EXISTS blockchain ;
+
+CREATE SCHEMA IF NOT EXISTS blockchain
+    AUTHORIZATION pgadmin;
+
+GRANT USAGE ON SCHEMA blockchain TO blockchain;
+
+GRANT ALL ON SCHEMA blockchain TO pgadmin;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE pgadmin IN SCHEMA blockchain
+GRANT DELETE, INSERT, SELECT, UPDATE ON TABLES TO blockchain;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE pgadmin IN SCHEMA blockchain
+GRANT SELECT, USAGE ON SEQUENCES TO blockchain;

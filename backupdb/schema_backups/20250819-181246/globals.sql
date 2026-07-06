@@ -1,0 +1,35 @@
+--
+-- PostgreSQL database cluster dump
+--
+
+SET default_transaction_read_only = off;
+
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+
+--
+-- Roles
+--
+
+CREATE ROLE blockchain;
+ALTER ROLE blockchain WITH NOSUPERUSER INHERIT NOCREATEROLE NOCREATEDB LOGIN NOREPLICATION NOBYPASSRLS PASSWORD 'SCRAM-SHA-256$4096:ocJ3Zf1fKD0QCMosFdiFuA==$GuKuzHIu4RKoq6aJXlIZzajVJrlV52pOmyxGjOlmUYQ=:JTAGXJ77JllhXsjZz+NkyUIXt9aHvQDAK6sEWbq+3IM=';
+CREATE ROLE pgadmin;
+ALTER ROLE pgadmin WITH SUPERUSER INHERIT NOCREATEROLE NOCREATEDB LOGIN NOREPLICATION NOBYPASSRLS PASSWORD 'SCRAM-SHA-256$4096:Dq0w2/GYkwV/45SAbWn4sQ==$N6NFRSdNbzEyOj03G5M7mQQCjqJLn5iiv23nKpFdcbc=:aE7bW4yzDl+ks0eGwMoWfgDaPRzTLMPSc+kj7M+zUY4=';
+CREATE ROLE postgres;
+ALTER ROLE postgres WITH SUPERUSER INHERIT CREATEROLE CREATEDB LOGIN REPLICATION BYPASSRLS;
+
+--
+-- User Configurations
+--
+
+
+
+
+
+
+
+
+--
+-- PostgreSQL database cluster dump complete
+--
+

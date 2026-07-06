@@ -1,0 +1,236 @@
+Gotcha — here’s a clear explanation and a ready-to-paste reminder note.
+
+---
+
+## **What `idle_in_transaction_session_timeout` Does**
+
+**Definition:**
+It’s a PostgreSQL setting (milliseconds) that **automatically kills a connection** if it sits *inside a transaction* without running any queries for longer than the timeout.
+
+* **"Idle in transaction"** = You’ve done `BEGIN` (or started an implicit transaction), but haven’t sent another SQL command yet — the transaction is still open, the server is holding locks, and resources are pinned.
+* If the timer expires → PostgreSQL terminates the connection with
+
+  ```
+  terminating connection due to idle-in-transaction timeout
+  ```
+* This is different from `statement_timeout` (which only counts while a query is running) and `idle_session_timeout` (which kills idle sessions even outside a transaction).
+
+**Why it exists:**
+
+* To prevent forgotten open transactions from blocking other queries and holding locks forever.
+* To free up resources if an app hangs mid-transaction.
+
+**Why it bit you:**
+
+* Your insert pipeline sometimes opens a transaction (in `process_block`) and waits while processing data or fetching RPC results.
+* If that gap > 30 s (your old setting), Postgres killed the connection → `AsyncConnection [BAD]`.
+
+---
+
+## **📌 Migration Reminder Note**
+
+*(Save this in your repo or infra docs)*
+
+```
+# --- PostgreSQL Migration Checklist ---
+# 1. Prevent idle-in-transaction timeouts for batch jobs:
+#    ALTER SYSTEM SET idle_in_transaction_session_timeout = 0;
+#    SELECT pg_reload_conf();
+#    SHOW idle_in_transaction_session_timeout; -- should be 0
+#    (Or ALTER ROLE <app_user> SET idle_in_transaction_session_timeout = 0;)
+
+# 2. Backup custom enums before migration:
+#    pg_dump --schema-only --table 'schema_name.*' --file enums_backup.sql
+#    # Or specifically:
+#    pg_dump --schema-only --schema blockchain --file enums_backup.sql
+#    # Restoring:
+#    psql -d target_db -f enums_backup.sql
+
+# 3. After restore, confirm enums:
+#    \dT+ blockchain.*
+#    SELECT enumtypid::regtype, enumlabel
+#    FROM pg_enum
+#    JOIN pg_type t ON t.oid = enumtypid
+#    WHERE enumtypid::regtype::text LIKE 'blockchain.%'
+#    ORDER BY enumtypid, enumsortorder;
+
+# 4. Recheck connection settings:
+#    SHOW max_connections;
+#    SHOW idle_in_transaction_session_timeout;
+#    SHOW statement_timeout;
+#    SHOW work_mem;
+```
+
+---
+
+If you like, I can also give you a **short SQL snippet** you can run on any fresh Postgres install that will both **disable idle\_in\_transaction\_session\_timeout** for your app role and **dump all enums** in one go so you can re-import them. That way it’s a single-step post-migration script.
+
+Perfect—here’s a tiny, copy-pasteable setup that does **both**:
+
+* disables `idle_in_transaction_session_timeout` for your app role, and
+* dumps your enums (really: full schema DDL, which includes enum definitions) to a file you can restore later.
+
+# 1) One-shot SQL (run once to set the role GUC)
+
+```sql
+-- Replace blockchain with your app role if different
+ALTER ROLE blockchain SET idle_in_transaction_session_timeout = 0;
+
+-- (Optional but common for batch jobs)
+-- ALTER ROLE blockchain SET statement_timeout = 0;
+
+-- Verify:
+SHOW idle_in_transaction_session_timeout;      -- session-level view
+SELECT rolname, rolconfig
+FROM pg_roles
+WHERE rolname = 'blockchain';
+```
+
+# 2) Bash script to apply the SQL and dump enums
+
+Save as `post_migration_setup.sh` and run `bash post_migration_setup.sh`.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# --- Edit these or export as env vars beforehand ---
+PGHOST="${PG_HOST:-127.0.0.1}"
+PGPORT="${PG_PORT:-5432}"
+PGDATABASE="${PG_DB:-postgres}"
+PGUSER="${PG_USER:-pgadmin}"          # superuser or role with ALTER ROLE priv
+PGAPPUSER="${PG_APP_USER:-blockchain}"  # your application role
+# If you need a password, export PGPASSWORD in the environment
+
+# --- Apply role-level timeout settings ---
+psql "host=$PGHOST port=$PGPORT dbname=$PGDATABASE user=$PGUSER" -v ON_ERROR_STOP=1 <<SQL
+ALTER ROLE ${PGAPPUSER} SET idle_in_transaction_session_timeout = 0;
+-- Optional:
+-- ALTER ROLE ${PGAPPUSER} SET statement_timeout = 0;
+
+-- Show effective settings
+SELECT rolname, rolconfig FROM pg_roles WHERE rolname = '${PGAPPUSER}';
+SQL
+
+# --- Dump schema DDL (includes enums) ---
+# Change --schema if your enums live in a specific schema (e.g., blockchain)
+# If they’re spread across schemas, you can omit --schema to dump all DDL
+SCHEMA_TO_DUMP="${PG_SCHEMA:-blockchain}"
+OUTFILE="${ENUMS_DUMP_FILE:-enums_backup.sql}"
+
+echo "Dumping schema DDL (includes enums) for schema '${SCHEMA_TO_DUMP}' to ${OUTFILE} ..."
+pg_dump \
+  --schema-only \
+  --schema="${SCHEMA_TO_DUMP}" \
+  --file="${OUTFILE}" \
+  "host=$PGHOST port=$PGPORT dbname=$PGDATABASE user=$PGUSER"
+
+echo "Done. Restore later with:"
+echo "  psql \"host=$PGHOST port=$PGPORT dbname=$PGDATABASE user=$PGUSER\" -f ${OUTFILE}"
+```
+
+# 3) Quick enum verification query (optional)
+
+```sql
+SELECT t.typnamespace::regnamespace AS schema,
+       t.typname                      AS enum_type,
+       e.enumlabel                    AS label,
+       e.enumsortorder
+FROM pg_enum e
+JOIN pg_type t ON t.oid = e.enumtypid
+WHERE t.typnamespace::regnamespace::text IN ('blockchain')   -- adjust if needed
+ORDER BY schema, enum_type, e.enumsortorder;
+```
+
+If you want me to tailor this to multiple schemas (or wire it into your deploy pipeline), say the word and I’ll tweak the script.
+
+Here’s a compact “turn-up” guide for your setup so you can safely run at higher POWER without surprises.
+
+---
+
+## **1. Bitcoin Core RPC tuning**
+
+Edit your `bitcoin.conf` (usually `~/.bitcoin/bitcoin.conf`) and add/adjust:
+
+```
+# --- RPC performance ---
+rpcthreads=160        # Thread pool for handling RPC calls
+rpcworkqueue=1024     # Max queued requests before refusing
+rpcclienttimeout=300  # Seconds before RPC times out (match Python timeouts)
+server=1              # Ensure RPC server mode is on
+```
+
+Then restart Bitcoin Core:
+
+```bash
+bitcoin-cli stop
+bitcoind -daemon
+```
+
+Check it took effect:
+
+```bash
+bitcoin-cli getnetworkinfo | jq '.connections_out'
+bitcoin-cli getrpcinfo
+```
+
+---
+
+## **2. PostgreSQL connection tuning**
+
+Edit `postgresql.conf` (location: `/etc/postgresql/<version>/main/postgresql.conf` or similar):
+
+```
+# --- Connection limits ---
+max_connections = 500       # Must be > DB_MAX_CONN + other connections
+shared_buffers = 8GB         # ~25% of RAM if dedicated DB server
+work_mem = 64MB              # Per sort/join; don't set too high globally
+maintenance_work_mem = 512MB # For VACUUM, CREATE INDEX
+```
+
+Then in `pg_hba.conf`, ensure your crawler user can connect quickly (no DNS delay):
+
+```
+host    all    blockchain    127.0.0.1/32    md5
+```
+
+Reload config:
+
+```bash
+sudo systemctl restart postgresql
+```
+
+Check connections:
+
+```bash
+psql -c "SHOW max_connections;"
+psql -c "SELECT count(*) FROM pg_stat_activity;"
+```
+
+---
+
+## **3. Matching your script**
+
+When running:
+
+```bash
+NUM_WORKERS=96 \
+RPC_CONCURRENCY=160 \
+DB_MAX_CONN=60 \
+DB_WRITE_CONCURRENCY=30 \
+JOB_BATCH_SIZE=1 \
+./00_extract_blocks_vin_vout_batchgpt5.py
+```
+
+Rule of thumb:
+
+* `rpcthreads` ≥ `RPC_CONCURRENCY`
+* `DB_MAX_CONN` ≤ `max_connections - 30` (leave room for other processes)
+* `DB_WRITE_CONCURRENCY` ≈ ½ of `DB_MAX_CONN`
+
+---
+
+Do you want me to also make you a **one-liner watch command** that shows live RPC usage *and* DB connection usage together, so you can see when you’re close to the limits? That’s perfect for running at POWER 200 without guessing.
+
+
+

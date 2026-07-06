@@ -1,0 +1,23 @@
+(btc) ubuntu@mini:~/myrepos/zi/crawlbtc$ cd scripts/
+(btc) ubuntu@mini:~/myrepos/zi/crawlbtc/scripts$ NUM_WORKERS=72 RPC_CONCURRENCY=128 JOB_BATCH_SIZE=1 POWER=100 ./00_extract_blocks_vin_vout_batchgpt5.py
+{"done": 910599, "in_progress": 0, "pending": 0, "skipped": 1, "eta": "calculating...", "blocks_processed": 0, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:19:28.557090Z", "level": "info"}
+(btc) ubuntu@mini:~/myrepos/zi/crawlbtc/scripts$ NUM_WORKERS=72 RPC_CONCURRENCY=128 JOB_BATCH_SIZE=1 POWER=100 ./00_extract_blocks_vin_vout_batchgpt5.py
+{"done": 910599, "in_progress": 23, "pending": 0, "skipped": 1, "eta": "calculating...", "blocks_processed": 0, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:19:36.047748Z", "level": "info"}
+{"done": 910599, "in_progress": 23, "pending": 0, "skipped": 1, "eta": "calculating...", "blocks_processed": 0, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:19:41.108920Z", "level": "info"}
+{"done": 910599, "in_progress": 23, "pending": 0, "skipped": 1, "eta": "calculating...", "blocks_processed": 0, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:19:46.144177Z", "level": "info"}
+{"done": 910599, "in_progress": 23, "pending": 0, "skipped": 1, "eta": "calculating...", "blocks_processed": 0, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:19:51.180418Z", "level": "info"}
+{"done": 910599, "in_progress": 23, "pending": 0, "skipped": 1, "eta": "calculating...", "blocks_processed": 0, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:19:56.214659Z", "level": "info"}
+{"done": 910599, "in_progress": 23, "pending": 0, "skipped": 1, "eta": "calculating...", "blocks_processed": 0, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:20:01.249413Z", "level": "info"}
+{"done": 910599, "in_progress": 23, "pending": 0, "skipped": 1, "eta": "calculating...", "blocks_processed": 0, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:20:06.283847Z", "level": "info"}
+{"done": 910599, "in_progress": 23, "pending": 0, "skipped": 1, "eta": "calculating...", "blocks_processed": 0, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:20:11.317488Z", "level": "info"}
+{"done": 910600, "in_progress": 22, "pending": 0, "skipped": 1, "eta": "2025-08-18 17:20:16", "blocks_processed": 1, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:20:16.359103Z", "level": "info"}
+{"done": 910601, "in_progress": 21, "pending": 0, "skipped": 1, "eta": "2025-08-18 17:20:21", "blocks_processed": 2, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:20:21.394247Z", "level": "info"}
+{"done": 910604, "in_progress": 18, "pending": 0, "skipped": 1, "eta": "2025-08-18 17:20:26", "blocks_processed": 5, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:20:26.429723Z", "level": "info"}
+{"done": 910610, "in_progress": 12, "pending": 0, "skipped": 1, "eta": "2025-08-18 17:20:31", "blocks_processed": 11, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:20:31.463511Z", "level": "info"}
+{"done": 910616, "in_progress": 6, "pending": 0, "skipped": 1, "eta": "2025-08-18 17:20:36", "blocks_processed": 17, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:20:36.499873Z", "level": "info"}
+{"done": 910621, "in_progress": 1, "pending": 0, "skipped": 1, "eta": "2025-08-18 17:20:41", "blocks_processed": 22, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:20:41.538966Z", "level": "info"}
+{"done": 910622, "in_progress": 0, "pending": 0, "skipped": 1, "eta": "2025-08-18 17:20:46", "blocks_processed": 23, "errors": 0, "event": "progress", "timestamp": "2025-08-18T15:20:46.575566Z", "level": "info"}
+
+ NUM_WORKERS=72 RPC_CONCURRENCY=128 JOB_BATCH_SIZE=1 POWER=100 ./00_extract_blocks_vin_vout_batchgpt5.py
+LOG_LEVEL=progress NUM_WORKERS=72 RPC_CONCURRENCY=128 JOB_BATCH_SIZE=1 POWER=100 ./01_backfill_vins.py 
+

@@ -1,0 +1,21 @@
+# Ignore .env file with secrets
+.env
+
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+env/
+venv/
+.btc/
+
+# Logs or temp
+*.log
+*.tmp
+
+# OS-specific junk
+.DS_Store
+Thumbs.db
+
