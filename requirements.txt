@@ -1,8 +1,8 @@
-certifi==2025.6.15
-charset-normalizer==3.4.2
-idna==3.10
-psycopg2-binary==2.9.10
-python-dotenv==1.1.1
-requests==2.32.4
-urllib3==2.5.0
-
+# Runtime dependencies (kept in sync with pyproject.toml).
+# Prefer `pip install .` / `pipx install .` which installs the crawlbtc CLI.
+aiohttp>=3.9
+psycopg[binary]>=3.1
+psycopg-pool>=3.2
+python-dotenv>=1.0
+structlog>=24.1
+orjson>=3.9

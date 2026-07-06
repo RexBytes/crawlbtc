@@ -1,0 +1,276 @@
+"""crawlbtc command-line interface.
+
+Same contact points as the legacy scripts: identical PostgreSQL tables,
+identical .env variables, identical JSON progress log stream.
+"""
+
+import argparse
+import sys
+from importlib import resources
+
+import psycopg
+
+from .core.config import load_config
+from .core.logging import get_logger
+
+log = get_logger("cli")
+
+_PHASE_COLUMNS = {"vout": "vout_status", "vin": "vin_status", "address": "address_status"}
+
+
+def _read_sql(name: str) -> str:
+    return (resources.files("crawlbtc") / "sql" / name).read_text()
+
+
+def _connect(cfg):
+    return psycopg.connect(cfg.db_conninfo, autocommit=True)
+
+
+# --- commands ---
+
+def cmd_init_db(args, cfg):
+    sql = _read_sql("schema.sql")
+    if args.show_sql:
+        print(sql)
+        return
+    with _connect(cfg) as conn:
+        conn.execute(sql)
+    print("schema initialized (schema 'blockchain')")
+
+
+def cmd_migrate(args, cfg):
+    migration_files = sorted(
+        p for p in (resources.files("crawlbtc") / "sql" / "migrations").iterdir()
+        if p.name.endswith(".sql")
+    )
+    if args.show_sql:
+        for p in migration_files:
+            print(f"-- {p.name}")
+            print(p.read_text())
+        return
+    with _connect(cfg) as conn:
+        for p in migration_files:
+            print(f"applying {p.name} ...")
+            conn.execute(p.read_text())
+    print("migrations applied")
+
+
+def cmd_extract(args, cfg):
+    from .core.runner import run_phase
+    from .phases.extract import ExtractPhase
+    run_phase(ExtractPhase, cfg)
+
+
+def cmd_backfill_vins(args, cfg):
+    from .core.runner import run_phase
+    from .phases.backfill_vins import BackfillVinsPhase
+    run_phase(BackfillVinsPhase, cfg)
+
+
+def cmd_scan_addresses(args, cfg):
+    from .core.runner import run_phase
+    from .phases.address_scans import AddressScanPhase
+    run_phase(AddressScanPhase, cfg)
+
+
+def cmd_run_all(args, cfg):
+    from .core.runner import run_phase
+    from .phases.address_scans import AddressScanPhase
+    from .phases.backfill_vins import BackfillVinsPhase
+    from .phases.extract import ExtractPhase
+    for factory in (ExtractPhase, BackfillVinsPhase, AddressScanPhase):
+        run_phase(factory, cfg)
+
+
+def cmd_status(args, cfg):
+    with _connect(cfg) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*), MIN(height), MAX(height) FROM blockchain.block_jobs;")
+        total, min_h, max_h = cur.fetchone()
+        print(f"block_jobs: {total:,} rows (heights {min_h}..{max_h})")
+        for col in _PHASE_COLUMNS.values():
+            cur.execute(
+                f"SELECT {col}::text, COUNT(*) FROM blockchain.block_jobs GROUP BY 1 ORDER BY 2 DESC;"
+            )
+            parts = ", ".join(f"{s}={c:,}" for s, c in cur.fetchall())
+            print(f"{col:<15} {parts}")
+
+
+def cmd_diagnose(args, cfg):
+    from .diagnose import run_diagnose
+    print(run_diagnose(cfg))
+
+
+def cmd_requeue(args, cfg):
+    if args.phase == "all":
+        columns = list(_PHASE_COLUMNS.values())
+    else:
+        columns = [_PHASE_COLUMNS[args.phase]]
+
+    if not (args.skipped or args.failed or args.from_height is not None or args.to_height is not None):
+        print("refusing to requeue everything: give --skipped, --failed, and/or "
+              "--from/--to to select blocks", file=sys.stderr)
+        sys.exit(2)
+
+    with _connect(cfg) as conn:
+        cur = conn.cursor()
+        for col in columns:
+            conds, params = [], []
+            if args.from_height is not None:
+                conds.append("height >= %s")
+                params.append(args.from_height)
+            if args.to_height is not None:
+                conds.append("height <= %s")
+                params.append(args.to_height)
+            status_conds = []
+            if args.skipped:
+                status_conds.append(f"{col} = 'skipped'")
+            if args.failed:
+                status_conds.append(f"{col} = 'failed'")
+            if status_conds:
+                conds.append("(" + " OR ".join(status_conds) + ")")
+            else:
+                # Height-range-only requeue: reset any terminal state.
+                conds.append(f"{col} IN ('done', 'skipped', 'failed')")
+            cur.execute(
+                f"""
+                UPDATE blockchain.block_jobs
+                   SET {col} = 'pending', updated_at = now()
+                 WHERE {' AND '.join(conds)};
+                """,
+                params,
+            )
+            print(f"{col}: {cur.rowcount:,} blocks requeued")
+    print("now run the matching phase (e.g. `crawlbtc extract`).")
+    print("if watched-address balances may be affected, finish with "
+          "`crawlbtc recompute-balances`.")
+
+
+_RECOMPUTE_SQL = """
+WITH outs AS (
+  SELECT i.address, i.amount, i.txid,
+         s.prev_txid IS NOT NULL AS spent,
+         s.spending_txid
+    FROM blockchain.transaction_io i
+    JOIN blockchain.watch_addresses wa ON wa.address = i.address
+    LEFT JOIN blockchain.spends s
+      ON s.prev_txid = i.txid AND s.prev_vout = i.idx
+   WHERE i.io_type = 'out'::blockchain.tx_io_type
+),
+touched AS (
+  SELECT address, txid AS tx FROM outs
+  UNION
+  SELECT address, spending_txid FROM outs WHERE spending_txid IS NOT NULL
+),
+tx_times AS (
+  SELECT tc.address,
+         MIN(t.received_time) AS first_ts,
+         MAX(t.received_time) AS last_ts,
+         COUNT(DISTINCT tc.tx) AS tx_count
+    FROM touched tc
+    LEFT JOIN blockchain.transactions t ON t.txid = tc.tx
+   GROUP BY tc.address
+),
+agg AS (
+  SELECT o.address,
+         COALESCE(SUM(o.amount) FILTER (WHERE NOT o.spent), 0) AS balance_sats,
+         COUNT(*) FILTER (WHERE NOT o.spent) AS utxo_count
+    FROM outs o
+   GROUP BY o.address
+)
+UPDATE blockchain.watch_addresses wa
+   SET balance_sats = a.balance_sats,
+       utxo_count   = a.utxo_count,
+       tx_count     = COALESCE(tt.tx_count, 0),
+       first_seen   = COALESCE(tt.first_ts AT TIME ZONE 'UTC', wa.first_seen),
+       last_seen    = COALESCE(tt.last_ts AT TIME ZONE 'UTC', wa.last_seen),
+       updated_at   = now()
+  FROM agg a
+  LEFT JOIN tx_times tt ON tt.address = a.address
+ WHERE wa.address = a.address;
+"""
+
+
+def cmd_recompute_balances(args, cfg):
+    """Exact rebuild of watch_addresses balances from transaction_io + spends.
+
+    Unlike the per-block delta scan, this is idempotent - run it any time,
+    especially after requeueing old blocks (e.g. for P2PK coverage).
+    """
+    with _connect(cfg) as conn:
+        cur = conn.cursor()
+        cur.execute("SET statement_timeout = 0;")
+        cur.execute(_RECOMPUTE_SQL)
+        print(f"recomputed balances for {cur.rowcount:,} watch addresses")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="crawlbtc",
+        description="Bitcoin Core -> PostgreSQL blockchain crawler and data processor",
+    )
+    parser.add_argument("-e", "--env-file", default=None,
+                        help="path to env file (default: CRAWLBTC_ENV_FILE or nearest .env)")
+    parser.add_argument("-P", "--processes", type=int, default=None,
+                        help="OS processes per phase (default: auto, env PROCESSES)")
+    parser.add_argument("-w", "--workers", type=int, default=None,
+                        help="total async workers (default: auto, env NUM_WORKERS)")
+    parser.add_argument("-b", "--batch-size", type=int, default=None,
+                        help="job claim batch size (default: 1, env JOB_BATCH_SIZE)")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("init-db", help="create the blockchain schema and tables")
+    p.add_argument("--show-sql", action="store_true", help="print the SQL instead of executing")
+    p.set_defaults(func=cmd_init_db, needs_probe=False)
+
+    p = sub.add_parser("migrate", help="apply additive migrations (p2pk enum, index cleanup)")
+    p.add_argument("--show-sql", action="store_true", help="print the SQL instead of executing")
+    p.set_defaults(func=cmd_migrate, needs_probe=False)
+
+    p = sub.add_parser("extract", help="extract blocks: transactions, vouts, vins, spends (single pass)")
+    p.set_defaults(func=cmd_extract, needs_probe=True)
+
+    p = sub.add_parser("backfill-vins", help="repair pass: fill vins for blocks missing them")
+    p.set_defaults(func=cmd_backfill_vins, needs_probe=True)
+
+    p = sub.add_parser("scan-addresses", help="apply per-block balance deltas to watch_addresses")
+    p.set_defaults(func=cmd_scan_addresses, needs_probe=True)
+
+    p = sub.add_parser("run-all", help="run extract, backfill-vins, scan-addresses in sequence")
+    p.set_defaults(func=cmd_run_all, needs_probe=True)
+
+    p = sub.add_parser("status", help="print per-phase job progress")
+    p.set_defaults(func=cmd_status, needs_probe=False)
+
+    p = sub.add_parser("diagnose", help="database/node health report (paste back for analysis)")
+    p.set_defaults(func=cmd_diagnose, needs_probe=False)
+
+    p = sub.add_parser("requeue", help="reset job statuses so blocks get reprocessed")
+    p.add_argument("--phase", choices=["vout", "vin", "address", "all"], default="vout")
+    p.add_argument("--from", dest="from_height", type=int, default=None, metavar="HEIGHT")
+    p.add_argument("--to", dest="to_height", type=int, default=None, metavar="HEIGHT")
+    p.add_argument("--skipped", action="store_true", help="requeue blocks marked skipped")
+    p.add_argument("--failed", action="store_true", help="requeue blocks marked failed")
+    p.set_defaults(func=cmd_requeue, needs_probe=False)
+
+    p = sub.add_parser("recompute-balances",
+                       help="exact rebuild of watch_addresses balances from io/spends data")
+    p.set_defaults(func=cmd_recompute_balances, needs_probe=False)
+
+    return parser
+
+
+def main(argv=None) -> None:
+    args = build_parser().parse_args(argv)
+    cfg = load_config(
+        processes=args.processes,
+        workers=args.workers,
+        batch_size=args.batch_size,
+        probe_db=getattr(args, "needs_probe", False),
+        env_file=args.env_file,
+    )
+    args.func(args, cfg)
+
+
+if __name__ == "__main__":
+    main()
