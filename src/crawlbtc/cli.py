@@ -101,15 +101,26 @@ def cmd_diagnose(args, cfg):
     print(run_diagnose(cfg))
 
 
+_BLOCK_FEATURES = {"vin", "vout", "both", "none", "op_return_only", "coinbase_only"}
+
+
 def cmd_requeue(args, cfg):
     if args.phase == "all":
         columns = list(_PHASE_COLUMNS.values())
     else:
         columns = [_PHASE_COLUMNS[args.phase]]
 
-    if not (args.skipped or args.failed or args.from_height is not None or args.to_height is not None):
-        print("refusing to requeue everything: give --skipped, --failed, and/or "
-              "--from/--to to select blocks", file=sys.stderr)
+    features = [f.strip() for f in args.features.split(",")] if args.features else []
+    bad = set(features) - _BLOCK_FEATURES
+    if bad:
+        print(f"unknown features: {', '.join(sorted(bad))} "
+              f"(valid: {', '.join(sorted(_BLOCK_FEATURES))})", file=sys.stderr)
+        sys.exit(2)
+
+    if not (args.skipped or args.failed or features
+            or args.from_height is not None or args.to_height is not None):
+        print("refusing to requeue everything: give --skipped, --failed, --features, "
+              "and/or --from/--to to select blocks", file=sys.stderr)
         sys.exit(2)
 
     with _connect(cfg) as conn:
@@ -122,13 +133,16 @@ def cmd_requeue(args, cfg):
             if args.to_height is not None:
                 conds.append("height <= %s")
                 params.append(args.to_height)
-            status_conds = []
+            selector_conds = []
             if args.skipped:
-                status_conds.append(f"{col} = 'skipped'")
+                selector_conds.append(f"{col} = 'skipped'")
             if args.failed:
-                status_conds.append(f"{col} = 'failed'")
-            if status_conds:
-                conds.append("(" + " OR ".join(status_conds) + ")")
+                selector_conds.append(f"{col} = 'failed'")
+            if features:
+                selector_conds.append("features = ANY(%s::blockchain.block_feature[])")
+                params.append(features)
+            if selector_conds:
+                conds.append("(" + " OR ".join(selector_conds) + ")")
             else:
                 # Height-range-only requeue: reset any terminal state.
                 conds.append(f"{col} IN ('done', 'skipped', 'failed')")
@@ -251,6 +265,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--to", dest="to_height", type=int, default=None, metavar="HEIGHT")
     p.add_argument("--skipped", action="store_true", help="requeue blocks marked skipped")
     p.add_argument("--failed", action="store_true", help="requeue blocks marked failed")
+    p.add_argument("--features", default=None, metavar="F1,F2",
+                   help="requeue blocks whose features match (e.g. op_return_only,none,vin)")
     p.set_defaults(func=cmd_requeue, needs_probe=False)
 
     p = sub.add_parser("recompute-balances",
@@ -269,7 +285,11 @@ def main(argv=None) -> None:
         probe_db=getattr(args, "needs_probe", False),
         env_file=args.env_file,
     )
-    args.func(args, cfg)
+    try:
+        args.func(args, cfg)
+    except BrokenPipeError:
+        # stdout piped into head/less that exited early
+        sys.exit(0)
 
 
 if __name__ == "__main__":
