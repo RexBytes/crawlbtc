@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crawlbtc"
+version = "0.2.0"
+description = "Bitcoin Core -> PostgreSQL blockchain crawler and data processor"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "RexBytes" }]
+dependencies = [
+    "aiohttp>=3.9",
+    "psycopg[binary]>=3.1",
+    "psycopg-pool>=3.2",
+    "python-dotenv>=1.0",
+    "structlog>=24.1",
+    "orjson>=3.9",
+]
+
+[project.scripts]
+crawlbtc = "crawlbtc.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+crawlbtc = ["sql/*.sql", "sql/migrations/*.sql"]

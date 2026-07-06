@@ -19,3 +19,8 @@ venv/
 .DS_Store
 Thumbs.db
 
+
+# Packaging artifacts
+*.egg-info/
+build/
+dist/
