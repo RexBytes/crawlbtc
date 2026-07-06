@@ -115,11 +115,19 @@ async def run_phase_async(phase_factory, config: Config, is_primary: bool = True
     rpc = RpcClient(config.rpc_url, config.rpc_user, config.rpc_password,
                     config.rpc_concurrency, client_id=f"crawlbtc-{phase.name}")
 
+    async def _configure_conn(conn):
+        # Skip the per-commit WAL flush wait; safe because job status and
+        # data commit atomically, so lost tail commits are re-queued work.
+        if config.synchronous_commit != "on":
+            await conn.execute("SET synchronous_commit TO off")
+            await conn.commit()  # pool requires configure to leave conn idle
+
     async with AsyncConnectionPool(
         config.db_conninfo,
         min_size=max(1, min(config.db_max_conn // 2, config.num_workers)),
         max_size=config.db_max_conn,
         timeout=config.db_pool_timeout,
+        configure=_configure_conn,
     ) as pool:
         async with aiohttp.ClientSession(connector=rpc.make_connector()) as session:
             rpc.session = session
