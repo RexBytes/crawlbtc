@@ -139,6 +139,13 @@ def load_config(
     else:
         per_proc_db_write = clamp(math.floor(per_proc_db * 0.50), 1, max(1, per_proc_db - 1))
 
+    # The pool must hold every writer PLUS a spare connection for the
+    # monitor loop (progress reads + block top-up); otherwise workers grab
+    # all connections for slow writes and the monitor starves - it stops
+    # printing and stops discovering new blocks. Grow the pool to guarantee
+    # that headroom regardless of how the env knobs were split.
+    per_proc_db = max(per_proc_db, per_proc_db_write + 2)
+
     return Config(
         rpc_url=f"http://{os.getenv('RPC_HOST')}:{os.getenv('RPC_PORT')}",
         rpc_user=os.getenv("RPC_USER", ""),
