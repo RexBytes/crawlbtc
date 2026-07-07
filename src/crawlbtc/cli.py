@@ -110,6 +110,11 @@ def cmd_diagnose(args, cfg):
     print(run_diagnose(cfg))
 
 
+def cmd_config(args, cfg):
+    from .configtool import cmd_config as _cmd_config
+    _cmd_config(args, cfg)
+
+
 _BLOCK_FEATURES = {"vin", "vout", "both", "none", "op_return_only", "coinbase_only"}
 
 
@@ -327,6 +332,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("diagnose", help="database/node health report (paste back for analysis)")
     p.set_defaults(func=cmd_diagnose, needs_probe=False)
+
+    p = sub.add_parser("config",
+                       help="show / back up / restore the configs crawlbtc depends on")
+    p.add_argument("action", nargs="?", choices=["show", "backup", "restore"], default="show",
+                   help="show (default), backup, or restore")
+    p.add_argument("path", nargs="?", default=None,
+                   help="backup: output dir (default: ./crawlbtc-config-backup-<ts>); "
+                        "restore: backup dir to read")
+    p.add_argument("--bitcoin-conf", default=None, help="explicit path to bitcoin.conf")
+    p.add_argument("--force", action="store_true", help="restore: actually write files (default dry-run)")
+    p.set_defaults(func=cmd_config, needs_probe=False)
 
     p = sub.add_parser("requeue", help="reset job statuses so blocks get reprocessed")
     p.add_argument("--phase", choices=["vout", "vin", "address", "all"], default="vout")
