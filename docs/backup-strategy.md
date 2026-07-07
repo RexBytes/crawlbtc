@@ -47,6 +47,24 @@ gpg --symmetric --cipher-algo AES256 watch_$(date +%F).dump
 Store **off-machine**, encrypted, keep several dated copies. This is the
 data whose loss you could never recover from. Automate it (cron/daily).
 
+## The `crawlbtc backup` command (recommended)
+
+`crawlbtc backup <dir>` does the consistent-snapshot dump described below
+in one step, and writes a provenance manifest (chain tip height+hash,
+per-table row estimates, crawlbtc + pg_dump versions, and SHA-256 of every
+dump file). It excludes `address_balances` by default (rebuildable).
+
+```bash
+crawlbtc backup /mnt/qnap/pgdump                 # -> /mnt/qnap/pgdump/blockchain_<timestamp>/
+crawlbtc backup /mnt/qnap/pgdump --pg-user pgadmin --jobs 8
+crawlbtc backup verify /mnt/qnap/pgdump/blockchain_2026-07-09_...   # re-check checksums
+```
+The manifest is the evidence anchor: it lets you prove a restored dataset
+is byte-identical to the state a report was based on. Take the
+authoritative backup when the crawler is idle. Restore with the printed
+`pg_restore ... --jobs N` line. The sections below explain the mechanics
+and the tiering the command implements.
+
 ## Tier 2 - the extracted graph, large but reproducible (the 4.5 TB)
 
 `transactions`, `transaction_io`, `spends`, `block_jobs`,

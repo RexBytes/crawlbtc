@@ -115,6 +115,11 @@ def cmd_config(args, cfg):
     _cmd_config(args, cfg)
 
 
+def cmd_backup(args, cfg):
+    from .backup import cmd_backup as _cmd_backup
+    _cmd_backup(args, cfg)
+
+
 _BLOCK_FEATURES = {"vin", "vout", "both", "none", "op_return_only", "coinbase_only"}
 
 
@@ -357,6 +362,22 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("recompute-balances",
                        help="exact rebuild of watch_addresses balances from io/spends data")
     p.set_defaults(func=cmd_recompute_balances, needs_probe=False)
+
+    p = sub.add_parser("backup",
+                       help="consistent evidence-grade dump of the blockchain schema + manifest")
+    p.add_argument("action", nargs="?", choices=["create", "verify"], default="create",
+                   help="create (default) or verify an existing dump")
+    p.add_argument("path", nargs="?", default=None,
+                   help="create: output dir (a blockchain_<timestamp> subdir is made); "
+                        "verify: the dump dir to check")
+    p.add_argument("--jobs", type=int, default=4, help="parallel pg_dump/pg_restore jobs (default 4)")
+    p.add_argument("--compress", type=int, default=6, help="dump compression level 0-9 (default 6)")
+    p.add_argument("--include-derived", action="store_true",
+                   help="also dump address_balances (default: excluded, rebuildable)")
+    p.add_argument("--no-checksum", action="store_true",
+                   help="skip SHA-256 of dump files (faster, but not verifiable)")
+    p.add_argument("--pg-user", default=None, help="override PG role for the dump (e.g. pgadmin)")
+    p.set_defaults(func=cmd_backup, needs_probe=False)
 
     p = sub.add_parser("build-balances",
                        help="materialize balances for EVERY address into blockchain.address_balances")

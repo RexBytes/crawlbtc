@@ -91,6 +91,9 @@ crawlbtc config             # show every config source (env file, bitcoin.conf, 
 crawlbtc config backup      # snapshot those configs to a timestamped dir
 crawlbtc config restore DIR # restore env/bitcoin.conf (dry-run; add --force to write)
 
+crawlbtc backup /mnt/qnap/pgdump      # consistent schema dump + provenance manifest
+crawlbtc backup verify DIR            # re-check a dump against its manifest checksums
+
 crawlbtc backfill-vins      # repair pass (only needed for verbosity-2 nodes / legacy data)
 crawlbtc requeue --phase vout --skipped     # reset blocks for reprocessing
 crawlbtc recompute-balances                 # exact watch_addresses rebuild from io/spends
