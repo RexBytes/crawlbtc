@@ -147,6 +147,10 @@ A full-chain database is several TB. When space gets tight, see
 tested-tradeoff measures (unused PK indexes ~250 GB, node pruning
 ~700 GB, txid bytea conversion ~1.5-2 TB) and the preconditions for each.
 
+For backup planning (what to back up, what not to, and why a logical dump
+is far smaller than the live DB), see
+[docs/backup-strategy.md](docs/backup-strategy.md).
+
 ## 🧪 Tests
 
 ```bash
