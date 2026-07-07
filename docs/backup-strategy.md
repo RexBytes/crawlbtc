@@ -116,6 +116,43 @@ incremental send is the least-effort version of this.
   silently altered - matters if a dataset underpins filed evidence.
 - Test-restore periodically: an untested backup is not a backup.
 
+## Existing backup infrastructure (as found)
+
+There is already a backup system at `/mnt/qnap/pgdump/` with dated dumps
+and README_BACKUP / README_RESTORE instruction files. It uses `pgadmin`
+(the object owner - correct for backups), directory-format per-table
+dumps + a full custom-format dump, a schema-only dump, a globals dump, and
+an extensions snapshot (`pgstattuple 1.5`, `plpgsql 1.0`). The
+methodology is sound and this doc aligns with it. Three cautions:
+
+1. **The existing dump is STALE.** It predates the P2PK backfill, the
+   ~47k new tip blocks, the migrations (p2pk enum, dropped indexes) and
+   `address_balances`. It is a valid *fallback to the old state*, not a
+   current backup. Take a fresh authoritative dump only AFTER the sync +
+   `build-balances` complete and the crawler is idle.
+
+2. **Verify the "full" dump is non-empty.** The per-table dumps exist, but
+   confirm the single full dump actually completed:
+   `du -sh /mnt/qnap/pgdump/blockchain_full_*/*` - an empty dir means only
+   the per-table dumps are real.
+
+3. **Separate per-table `pg_dump` calls are NOT a mutually consistent
+   snapshot.** Each is internally consistent but reflects a different
+   moment; run against a live, writing crawler they can disagree (a
+   `spends` row referencing a `txid` absent from an earlier
+   `transactions` dump). For an EVIDENCE database this matters. Two fixes:
+   - Take the authoritative backup while the crawler is **stopped/idle**.
+   - Use ONE dump invocation over the whole schema - directory format with
+     `--jobs` uses a single synchronized snapshot across all workers, so
+     you get parallelism AND cross-table consistency:
+     ```bash
+     pg_dump -h localhost -U pgadmin -d postgres \
+       --schema=blockchain -Fd -j8 -Z6 \
+       -f /mnt/qnap/pgdump/blockchain_consistent_$(date +%F)
+     ```
+   Reserve the per-table split for selective restores, not as the
+   primary consistent backup.
+
 ## Interaction with disk reclamation
 
 The txid->bytea conversion in `reclaiming-space.md` roughly halves the
