@@ -74,9 +74,15 @@ Caveats:
 - Dump time on 6.3 B rows is long (bottlenecked on the biggest table,
   which is one job) - plan for many hours. Restore + index build is
   comparable. This is a "monthly / after-milestone" job, not nightly.
-- **Needs external storage.** This disk is ~80% full and the other drive
-  is Windows - there is nowhere local to put even a compressed dump.
-  Acquire an external/NAS target before relying on Tier 2.
+- **Needs external storage** - the primary NVMe is ~80% full. A network
+  NAS is the natural target (e.g. the QNAP at /mnt/qnap here, ~50 TB
+  free). A ~500-800 GB compressed dump writes over the network in a
+  couple of hours on gigabit; both Tier 1 and Tier 2 backups should land
+  there, NOT on the primary disk (a same-disk backup protects nothing).
+- **A NAS backup is good but not sufficient alone** for evidence-grade
+  data: the NAS should itself be redundant (RAID), and at least one copy
+  of Tier 1 (the irreplaceable curated/keys data) should also go OFFLINE
+  / off-site (ransomware, fire, NAS failure). Test-restore periodically.
 
 ### Alternative: physical base backup + WAL archiving (PITR)
 The workload is almost append-only (new blocks added, old rarely
