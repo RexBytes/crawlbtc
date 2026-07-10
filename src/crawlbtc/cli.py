@@ -252,6 +252,19 @@ def cmd_build_balances(args, cfg):
     full-chain database this is a big batch job - expect hours, and make
     sure there is temp disk headroom for the aggregation spill.
     """
+    try:
+        _run_build_balances(cfg, args)
+    except psycopg.errors.InsufficientPrivilege as e:
+        print(f"\npermission denied: {e}", file=sys.stderr)
+        print("build-balances creates and truncates blockchain.address_balances, which "
+              "requires the schema OWNER (usually pgadmin), not the app role.", file=sys.stderr)
+        print("run it as the owner, e.g.:", file=sys.stderr)
+        print("  PG_USER=pgadmin PG_PASSWORD=... crawlbtc build-balances --work-mem 8GB",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+def _run_build_balances(cfg, args):
     with _connect(cfg) as conn:
         cur = conn.cursor()
         cur.execute("""
