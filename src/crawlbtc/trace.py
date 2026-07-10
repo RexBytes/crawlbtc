@@ -45,13 +45,20 @@ def _utxo_count(cur, address):
     return cur.fetchone()[0]
 
 
-def _outgoing_edges(cur, address, fanout):
-    """Top `fanout` recipients of value sent FROM `address`, haircut-weighted."""
+def _outgoing_edges(cur, address, fanout, max_utxos=2000):
+    """Top `fanout` recipients of value sent FROM `address`, haircut-weighted.
+
+    Only the `max_utxos` largest outputs of the address are followed, which
+    bounds the query on high-activity (many-small-UTXO) addresses regardless
+    of total transaction count.
+    """
     cur.execute("""
         WITH u_utxos AS (
             SELECT txid, idx, amount
               FROM blockchain.transaction_io
              WHERE address = %s AND io_type = 'out'
+             ORDER BY amount DESC
+             LIMIT %s
         ),
         spent AS (
             SELECT s.spending_txid, SUM(u.amount) AS u_in
@@ -79,17 +86,18 @@ def _outgoing_edges(cur, address, fanout):
          GROUP BY t.to_addr
          ORDER BY est_value DESC NULLS LAST
          LIMIT %s;
-    """, (address, fanout))
+    """, (address, max_utxos, fanout))
     return cur.fetchall()
 
 
-def _incoming_edges(cur, address, fanout):
-    """Top `fanout` funders that paid value INTO `address`."""
+def _incoming_edges(cur, address, fanout, max_utxos=2000):
+    """Top `fanout` funders that paid value INTO `address` (bounded)."""
     cur.execute("""
         WITH u_recv AS (
             SELECT DISTINCT txid
               FROM blockchain.transaction_io
              WHERE address = %s AND io_type = 'out'
+             LIMIT %s
         )
         SELECT i.address AS from_addr,
                SUM(i.amount)::bigint AS value_in,
@@ -103,7 +111,7 @@ def _incoming_edges(cur, address, fanout):
          GROUP BY i.address
          ORDER BY value_in DESC NULLS LAST
          LIMIT %s;
-    """, (address, fanout))
+    """, (address, max_utxos, fanout))
     return cur.fetchall()
 
 
@@ -142,7 +150,7 @@ def _addr_totals(cur, address):
     return int(recv), int(sent)
 
 
-def _origin_cluster(cur, origin, tx_cap=3000, addr_cap=8000):
+def _origin_cluster(cur, origin, tx_cap=2000, addr_cap=8000):
     """Addresses probably owned by the SAME entity as `origin`.
 
     Common-input-ownership heuristic: addresses co-spent as inputs in the
@@ -173,7 +181,7 @@ def _origin_cluster(cur, origin, tx_cap=3000, addr_cap=8000):
 
 
 def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=True,
-                timeout=60, progress=True):
+                timeout=60, progress=True, max_utxos=2000):
     t0 = time.time()
 
     def tick(msg):
@@ -233,7 +241,8 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
                     if _utxo_count(cur, addr) > HUB_UTXO_THRESHOLD and addr != origin:
                         nodes[addr]["is_hub"] = True
                         continue
-                    rows = (_outgoing_edges if dir_ == "out" else _incoming_edges)(cur, addr, fanout)
+                    rows = (_outgoing_edges if dir_ == "out" else _incoming_edges)(
+                        cur, addr, fanout, max_utxos)
                 except psycopg.errors.QueryCanceled:
                     timeouts[0] += 1
                     nodes[addr]["timed_out"] = True
@@ -272,7 +281,7 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
 
         # Origin's immediate funders, for the incoming-context panel.
         try:
-            inc_rows = _incoming_edges(cur, origin, fanout)
+            inc_rows = _incoming_edges(cur, origin, fanout, max_utxos)
         except psycopg.errors.QueryCanceled:
             timeouts[0] += 1
             inc_rows = []
@@ -442,7 +451,7 @@ def cmd_trace(args, cfg):
     try:
         graph = build_graph(cfg, origin, args.depth, args.fanout, args.max_nodes,
                             direction=args.direction, cluster=not args.no_cluster,
-                            timeout=args.timeout)
+                            timeout=args.timeout, max_utxos=args.max_utxos)
     except psycopg.errors.QueryCanceled:
         print(f"the origin's own query timed out ({args.timeout}s). The address is very "
               f"busy or the cache is cold (e.g. just after a backup). Retry (cache warms), "

@@ -400,6 +400,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="skip common-input related-wallet detection")
     p.add_argument("--timeout", type=int, default=60,
                    help="per-query timeout in seconds; slow nodes skip, not abort (default 60)")
+    p.add_argument("--max-utxos", type=int, default=2000,
+                   help="follow only the N largest outputs per address (bounds busy "
+                        "high-UTXO addresses; default 2000)")
     p.add_argument("--report-title", default=None,
                    help="title shown on the report (default: neutral, no tool branding)")
     p.add_argument("--out", default=None, help="output directory (default: current dir)")
