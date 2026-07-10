@@ -389,11 +389,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("trace",
                        help="follow value outward from an address -> interactive HTML + Excel")
     p.add_argument("address", help="starting bitcoin address")
-    p.add_argument("--depth", type=int, default=3, help="hops to expand outward (default 3)")
+    p.add_argument("--direction", choices=["out", "in", "both"], default="out",
+                   help="follow value outgoing (default), incoming (provenance), or both")
+    p.add_argument("--depth", type=int, default=3, help="hops to expand (default 3)")
     p.add_argument("--fanout", type=int, default=10,
-                   help="max recipients kept per address, by value (default 10)")
+                   help="max counterparties kept per address, by value (default 10)")
     p.add_argument("--max-nodes", type=int, default=750,
                    help="hard cap on addresses in the graph (default 750)")
+    p.add_argument("--no-cluster", action="store_true",
+                   help="skip common-input related-wallet detection")
     p.add_argument("--out", default=None, help="output directory (default: current dir)")
     p.set_defaults(func=cmd_trace, needs_probe=False)
 

@@ -139,98 +139,135 @@ def _addr_totals(cur, address):
     return int(recv), int(sent)
 
 
-def build_graph(cfg, origin, depth, fanout, max_nodes):
+def _origin_cluster(cur, origin, tx_cap=3000, addr_cap=8000):
+    """Addresses probably owned by the SAME entity as `origin`.
+
+    Common-input-ownership heuristic: addresses co-spent as inputs in the
+    same transaction are almost certainly one wallet. One bounded round
+    (direct co-inputs) - transitive expansion is intentionally NOT done, as
+    it over-merges through CoinJoin/PayJoin. Always includes the origin.
+    Bounded by tx_cap/addr_cap and the session statement_timeout.
+    """
+    try:
+        cur.execute("""
+            WITH origin_spends AS (
+              SELECT DISTINCT s.spending_txid
+                FROM blockchain.transaction_io o
+                JOIN blockchain.spends s ON s.prev_txid = o.txid AND s.prev_vout = o.idx
+               WHERE o.address = %s AND o.io_type = 'out'
+               LIMIT %s
+            )
+            SELECT DISTINCT i.address
+              FROM origin_spends os
+              JOIN blockchain.transaction_io i
+                ON i.txid = os.spending_txid AND i.io_type = 'in'
+             WHERE i.address IS NOT NULL
+             LIMIT %s;
+        """, (origin, tx_cap, addr_cap))
+        return {r[0] for r in cur.fetchall()} | {origin}
+    except psycopg.errors.QueryCanceled:
+        return {origin}
+
+
+def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=True):
     with _connect(cfg) as conn:
         cur = conn.cursor()
         cur.execute("SET statement_timeout = '120s';")
 
-        nodes = {}   # address -> node dict
-        edges = []   # list of edge dicts
-        loops = []   # edges whose target is the origin
+        nodes = {}
+        edges = []
+        loops = []   # edges that return value to the origin's cluster (round-trips)
 
-        def ensure_node(addr, d):
+        cluster_addrs = _origin_cluster(cur, origin) if cluster else {origin}
+
+        def ensure_node(addr, d, side):
             if addr not in nodes:
                 recv, sent = _addr_totals(cur, addr)
                 nodes[addr] = {
-                    "address": addr, "depth": d,
+                    "address": addr, "depth": abs(d), "side": side,
+                    "level": 0 if addr == origin else (abs(d) if side == "out" else -abs(d)),
                     "is_origin": addr == origin,
                     "total_received_btc": recv / SATS,
                     "total_sent_btc": sent / SATS,
-                    "is_hub": False, "expanded": False, "truncated": False,
+                    "same_owner": (addr in cluster_addrs and addr != origin),
+                    "is_hub": False, "truncated": False,
                 }
-            else:
-                nodes[addr]["depth"] = min(nodes[addr]["depth"], d)
             return nodes[addr]
 
-        ensure_node(origin, 0)
+        ensure_node(origin, 0, "origin")
 
-        # Origin's incoming funders (depth-1 context, not expanded outward).
-        origin_incoming = []
-        for from_addr, value_in, tx_count, first_seen, last_seen in _incoming_edges(cur, origin, fanout):
-            origin_incoming.append({
-                "address": from_addr, "value_btc": (value_in or 0) / SATS,
-                "tx_count": tx_count,
-                "first_seen": str(first_seen) if first_seen else None,
-                "last_seen": str(last_seen) if last_seen else None,
-            })
-
-        # BFS outward following outgoing flow.
-        q = deque([(origin, 0)])
-        seen_expanded = set()
-        while q:
-            addr, d = q.popleft()
-            if addr in seen_expanded or d >= depth:
-                continue
-            seen_expanded.add(addr)
-
-            uc = _utxo_count(cur, addr)
-            if uc > HUB_UTXO_THRESHOLD:
-                nodes[addr]["is_hub"] = True
-                continue  # do not expand hubs
-            nodes[addr]["expanded"] = True
-
-            rows = _outgoing_edges(cur, addr, fanout)
-            if len(rows) >= fanout:
-                nodes[addr]["truncated"] = True
-            for to_addr, est_value, tx_count, first_seen, last_seen in rows:
-                if to_addr is None:
+        def expand(dir_):
+            q = deque([(origin, 0)])
+            seen = set()
+            while q:
+                addr, d = q.popleft()
+                if addr in seen or d >= depth:
                     continue
-                child = ensure_node(to_addr, d + 1)
-                edge = {
-                    "from": addr, "to": to_addr,
-                    "value_btc": (est_value or 0) / SATS,
-                    "tx_count": tx_count,
-                    "first_seen": str(first_seen) if first_seen else None,
-                    "last_seen": str(last_seen) if last_seen else None,
-                    "loop_to_origin": (to_addr == origin),
-                }
-                edges.append(edge)
-                if to_addr == origin:
-                    loops.append(edge)
-                if len(nodes) >= max_nodes:
-                    q.clear()
-                    break
-                if d + 1 < depth and to_addr != origin:
-                    q.append((to_addr, d + 1))
+                seen.add(addr)
+                if _utxo_count(cur, addr) > HUB_UTXO_THRESHOLD and addr != origin:
+                    nodes[addr]["is_hub"] = True
+                    continue
+                rows = (_outgoing_edges if dir_ == "out" else _incoming_edges)(cur, addr, fanout)
+                if len(rows) >= fanout:
+                    nodes[addr]["truncated"] = True
+                for other, est_value, tx_count, first_seen, last_seen in rows:
+                    if other is None:
+                        continue
+                    ensure_node(other, d + 1, dir_)
+                    frm, to = (addr, other) if dir_ == "out" else (other, addr)
+                    returns_to_owner = (other in cluster_addrs)
+                    edge = {
+                        "from": frm, "to": to,
+                        "value_btc": (est_value or 0) / SATS,
+                        "tx_count": tx_count,
+                        "first_seen": str(first_seen) if first_seen else None,
+                        "last_seen": str(last_seen) if last_seen else None,
+                        "dir": dir_,
+                        "confidence": round(max(0.15, 0.8 ** d), 3),
+                        "returns_to_owner": returns_to_owner,
+                    }
+                    edges.append(edge)
+                    if returns_to_owner:
+                        loops.append(edge)
+                    if len(nodes) >= max_nodes:
+                        q.clear()
+                        break
+                    if d + 1 < depth and other not in cluster_addrs:
+                        q.append((other, d + 1))
 
-        # Attach known-entity labels to every node in the graph.
-        ents = _entity_lookup(cur, nodes.keys())
-        for addr, (name, cat, src) in ents.items():
+        if direction in ("out", "both"):
+            expand("out")
+        if direction in ("in", "both"):
+            expand("in")
+
+        # Origin's immediate funders, for the incoming-context panel.
+        origin_incoming = [{
+            "address": fr, "value_btc": (v or 0) / SATS, "tx_count": tc,
+            "first_seen": str(fs) if fs else None, "last_seen": str(ls) if ls else None,
+            "same_owner": fr in cluster_addrs,
+        } for fr, v, tc, fs, ls in _incoming_edges(cur, origin, fanout)]
+
+        # Known-entity labels.
+        for addr, (name, cat, src) in _entity_lookup(cur, nodes.keys()).items():
             nodes[addr]["entity"] = name
             nodes[addr]["entity_category"] = cat
             nodes[addr]["entity_source"] = src
 
-        origin_totals = nodes[origin]
+        o = nodes[origin]
+        related = [n for n in nodes.values() if n["same_owner"]]
         return {
             "origin": origin,
             "generated": datetime.datetime.now().isoformat(),
             "params": {"depth": depth, "fanout": fanout, "max_nodes": max_nodes,
+                       "direction": direction, "clustering": cluster,
                        "hub_threshold": HUB_UTXO_THRESHOLD},
             "origin_summary": {
-                "total_received_btc": origin_totals["total_received_btc"],
-                "total_sent_btc": origin_totals["total_sent_btc"],
+                "total_received_btc": o["total_received_btc"],
+                "total_sent_btc": o["total_sent_btc"],
                 "distinct_funders_shown": len(origin_incoming),
-                "loops_back_to_origin": len(loops),
+                "related_wallets": len(related),
+                "cluster_size": len(cluster_addrs),
+                "round_trips_to_owner": len(loops),
                 "node_count": len(nodes),
                 "edge_count": len(edges),
                 "capped": len(nodes) >= max_nodes,
@@ -238,6 +275,7 @@ def build_graph(cfg, origin, depth, fanout, max_nodes):
             "nodes": list(nodes.values()),
             "edges": edges,
             "origin_incoming": origin_incoming,
+            "related_wallets": [n["address"] for n in related],
             "loops": loops,
         }
 
@@ -263,6 +301,7 @@ def write_xlsx(graph, path):
         ("crawlbtc address trace", ""),
         ("origin", graph["origin"]),
         ("generated", graph["generated"]),
+        ("direction", graph["params"]["direction"]),
         ("depth", graph["params"]["depth"]),
         ("max fan-out per node", graph["params"]["fanout"]),
         ("", ""),
@@ -271,7 +310,9 @@ def write_xlsx(graph, path):
         ("funders shown", s["distinct_funders_shown"]),
         ("addresses in graph", s["node_count"]),
         ("flows (edges)", s["edge_count"]),
-        ("loops back to origin", s["loops_back_to_origin"]),
+        ("related wallets (same owner)", s["related_wallets"]),
+        ("origin cluster size", s["cluster_size"]),
+        ("round-trips to owner", s["round_trips_to_owner"]),
         ("graph hit node cap", s["capped"]),
     ]
     for r in rows:
@@ -279,38 +320,38 @@ def write_xlsx(graph, path):
     ws["A1"].font = bold
 
     ws = wb.create_sheet("Nodes")
-    ws.append(["address", "depth", "is_origin", "is_hub", "truncated",
-               "total_received_btc", "total_sent_btc"])
+    ws.append(["address", "level", "side", "is_origin", "same_owner", "entity",
+               "category", "is_hub", "total_received_btc", "total_sent_btc"])
     for c in ws[1]:
         c.font = bold
-    for n in sorted(graph["nodes"], key=lambda x: (x["depth"], -x["total_received_btc"])):
-        ws.append([n["address"], n["depth"], n["is_origin"], n["is_hub"], n["truncated"],
+    for n in sorted(graph["nodes"], key=lambda x: (x["level"], -x["total_received_btc"])):
+        ws.append([n["address"], n["level"], n["side"], n["is_origin"], n["same_owner"],
+                   n.get("entity", ""), n.get("entity_category", ""), n["is_hub"],
                    round(n["total_received_btc"], 8), round(n["total_sent_btc"], 8)])
 
     ws = wb.create_sheet("Flows (edges)")
-    ws.append(["from", "to", "est_value_btc", "tx_count", "loop_to_origin",
-               "first_seen", "last_seen"])
+    ws.append(["from", "to", "dir", "est_value_btc", "tx_count", "confidence",
+               "returns_to_owner", "first_seen", "last_seen"])
     for c in ws[1]:
         c.font = bold
     for e in sorted(graph["edges"], key=lambda x: -x["value_btc"]):
-        ws.append([e["from"], e["to"], round(e["value_btc"], 8), e["tx_count"],
-                   e["loop_to_origin"], e["first_seen"], e["last_seen"]])
+        ws.append([e["from"], e["to"], e["dir"], round(e["value_btc"], 8), e["tx_count"],
+                   e["confidence"], e["returns_to_owner"], e["first_seen"], e["last_seen"]])
 
     ws = wb.create_sheet("Origin incoming")
-    ws.append(["funder_address", "value_btc", "tx_count", "first_seen", "last_seen"])
+    ws.append(["funder_address", "value_btc", "tx_count", "same_owner", "first_seen", "last_seen"])
     for c in ws[1]:
         c.font = bold
     for f in graph["origin_incoming"]:
         ws.append([f["address"], round(f["value_btc"], 8), f["tx_count"],
-                   f["first_seen"], f["last_seen"]])
+                   f.get("same_owner", False), f["first_seen"], f["last_seen"]])
 
-    if graph["loops"]:
-        ws = wb.create_sheet("Loops to origin")
-        ws.append(["from", "to (origin)", "est_value_btc", "tx_count"])
-        for c in ws[1]:
-            c.font = bold
-        for e in graph["loops"]:
-            ws.append([e["from"], e["to"], round(e["value_btc"], 8), e["tx_count"]])
+    if graph["related_wallets"]:
+        ws = wb.create_sheet("Related wallets")
+        ws.append(["address (probably same owner as origin)"])
+        ws["A1"].font = bold
+        for a in graph["related_wallets"]:
+            ws.append([a])
 
     wb.save(path)
 
@@ -318,11 +359,13 @@ def write_xlsx(graph, path):
 def write_html(graph, path):
     data_json = json.dumps({
         "origin": graph["origin"],
-        "nodes": [{"id": n["address"], "depth": n["depth"], "origin": n["is_origin"],
-                   "hub": n["is_hub"], "recv": round(n["total_received_btc"], 6),
+        "nodes": [{"id": n["address"], "depth": n["depth"], "level": n["level"],
+                   "origin": n["is_origin"], "hub": n["is_hub"], "owner": n["same_owner"],
+                   "entity": n.get("entity"), "etype": n.get("entity_category"),
+                   "recv": round(n["total_received_btc"], 6),
                    "sent": round(n["total_sent_btc"], 6)} for n in graph["nodes"]],
         "edges": [{"s": e["from"], "t": e["to"], "v": round(e["value_btc"], 6),
-                   "n": e["tx_count"], "loop": e["loop_to_origin"]} for e in graph["edges"]],
+                   "n": e["tx_count"], "loop": e["returns_to_owner"]} for e in graph["edges"]],
     })
     summary = graph["origin_summary"]
     html = _HTML_TEMPLATE.replace("__DATA__", data_json) \
@@ -331,7 +374,7 @@ def write_html(graph, path):
         .replace("__DEPTH__", str(graph["params"]["depth"])) \
         .replace("__NODES__", str(summary["node_count"])) \
         .replace("__EDGES__", str(summary["edge_count"])) \
-        .replace("__LOOPS__", str(summary["loops_back_to_origin"])) \
+        .replace("__LOOPS__", str(summary["round_trips_to_owner"])) \
         .replace("__RECV__", f"{summary['total_received_btc']:.8f}") \
         .replace("__SENT__", f"{summary['total_sent_btc']:.8f}")
     with open(path, "w") as f:
@@ -351,9 +394,11 @@ def cmd_trace(args, cfg):
               f"--fanout (e.g. --fanout 3 --depth {args.depth} = {3**args.depth:,}) so the "
               f"picture isn't truncated. High-degree hubs are pruned automatically.")
 
-    print(f"tracing {origin} (depth={args.depth}, fanout={args.fanout}) ...")
+    print(f"tracing {origin} (direction={args.direction}, depth={args.depth}, "
+          f"fanout={args.fanout}) ...")
     try:
-        graph = build_graph(cfg, origin, args.depth, args.fanout, args.max_nodes)
+        graph = build_graph(cfg, origin, args.depth, args.fanout, args.max_nodes,
+                            direction=args.direction, cluster=not args.no_cluster)
     except psycopg.errors.QueryCanceled:
         print("a query timed out (statement_timeout 120s). Try smaller --fanout/--depth, "
               "or run when build-balances/backup are not competing for disk.", file=sys.stderr)
@@ -361,8 +406,9 @@ def cmd_trace(args, cfg):
 
     s = graph["origin_summary"]
     print(f"  received {s['total_received_btc']:.8f} BTC, sent {s['total_sent_btc']:.8f} BTC")
-    print(f"  graph: {s['node_count']} addresses, {s['edge_count']} flows, "
-          f"{s['loops_back_to_origin']} loop(s) back to origin"
+    print(f"  graph: {s['node_count']} addresses, {s['edge_count']} flows")
+    print(f"  related wallets (same owner): {s['related_wallets']} "
+          f"(origin cluster {s['cluster_size']}), round-trips to owner: {s['round_trips_to_owner']}"
           + ("  [hit node cap]" if s["capped"] else ""))
 
     base = os.path.join(out_dir, f"{origin}_trace")
