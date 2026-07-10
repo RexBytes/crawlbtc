@@ -303,6 +303,12 @@ def run_verify(cfg, args):
 
 
 def cmd_backup(args, cfg):
+    # Flush prints line-by-line so a nohup/redirected log is live, not
+    # buffered until the (hours-later) process exit.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     action = getattr(args, "action", None) or "create"
     # Allow `crawlbtc backup <path>` (path given as the first positional).
     if action not in ("create", "verify"):
