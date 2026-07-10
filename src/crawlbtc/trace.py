@@ -23,6 +23,8 @@ from collections import deque
 
 import psycopg
 
+from .trace_template import TEMPLATE
+
 SATS = 100_000_000
 
 # An address with more than this many outputs is treated as a hub
@@ -253,11 +255,18 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
             nodes[addr]["entity_category"] = cat
             nodes[addr]["entity_source"] = src
 
+        try:
+            cur.execute("SELECT max(height) FROM blockchain.block_jobs;")
+            tip_height = cur.fetchone()[0]
+        except Exception:
+            tip_height = None
+
         o = nodes[origin]
         related = [n for n in nodes.values() if n["same_owner"]]
         return {
             "origin": origin,
-            "generated": datetime.datetime.now().isoformat(),
+            "generated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "tip": f"db height {tip_height}" if tip_height is not None else "unknown",
             "params": {"depth": depth, "fanout": fanout, "max_nodes": max_nodes,
                        "direction": direction, "clustering": cluster,
                        "hub_threshold": HUB_UTXO_THRESHOLD},
@@ -287,7 +296,7 @@ def write_json(graph, path):
         json.dump(graph, f, indent=2)
 
 
-def write_xlsx(graph, path):
+def write_xlsx(graph, path, title="Bitcoin address trace"):
     from openpyxl import Workbook
     from openpyxl.styles import Font
 
@@ -298,7 +307,7 @@ def write_xlsx(graph, path):
     ws.title = "Summary"
     s = graph["origin_summary"]
     rows = [
-        ("crawlbtc address trace", ""),
+        (title, ""),
         ("origin", graph["origin"]),
         ("generated", graph["generated"]),
         ("direction", graph["params"]["direction"]),
@@ -356,27 +365,27 @@ def write_xlsx(graph, path):
     wb.save(path)
 
 
-def write_html(graph, path):
-    data_json = json.dumps({
+def write_html(graph, path, title="Bitcoin address trace report"):
+    """Render the full multi-tab report (see trace_template.TEMPLATE)."""
+    def when(e):
+        fs = e.get("first_seen")
+        return fs[:7] if fs else ""
+    data = {
+        "title": title,
         "origin": graph["origin"],
-        "nodes": [{"id": n["address"], "depth": n["depth"], "level": n["level"],
+        "generated": graph["generated"],
+        "tip": graph.get("tip", "unknown"),
+        "explorer": "https://mempool.space",
+        "nodes": [{"id": n["address"], "depth": n["depth"], "side": n["side"],
                    "origin": n["is_origin"], "hub": n["is_hub"], "owner": n["same_owner"],
                    "entity": n.get("entity"), "etype": n.get("entity_category"),
                    "recv": round(n["total_received_btc"], 6),
                    "sent": round(n["total_sent_btc"], 6)} for n in graph["nodes"]],
         "edges": [{"s": e["from"], "t": e["to"], "v": round(e["value_btc"], 6),
-                   "n": e["tx_count"], "loop": e["returns_to_owner"]} for e in graph["edges"]],
-    })
-    summary = graph["origin_summary"]
-    html = _HTML_TEMPLATE.replace("__DATA__", data_json) \
-        .replace("__ORIGIN__", graph["origin"]) \
-        .replace("__GENERATED__", graph["generated"]) \
-        .replace("__DEPTH__", str(graph["params"]["depth"])) \
-        .replace("__NODES__", str(summary["node_count"])) \
-        .replace("__EDGES__", str(summary["edge_count"])) \
-        .replace("__LOOPS__", str(summary["round_trips_to_owner"])) \
-        .replace("__RECV__", f"{summary['total_received_btc']:.8f}") \
-        .replace("__SENT__", f"{summary['total_sent_btc']:.8f}")
+                   "n": e["tx_count"], "when": when(e), "dir": e["dir"],
+                   "loop": e["returns_to_owner"]} for e in graph["edges"]],
+    }
+    html = TEMPLATE.replace("__DATA__", json.dumps(data))
     with open(path, "w") as f:
         f.write(html)
 
@@ -411,11 +420,12 @@ def cmd_trace(args, cfg):
           f"(origin cluster {s['cluster_size']}), round-trips to owner: {s['round_trips_to_owner']}"
           + ("  [hit node cap]" if s["capped"] else ""))
 
+    title = args.report_title or "Bitcoin address trace report"
     base = os.path.join(out_dir, f"{origin}_trace")
     write_json(graph, base + ".json")
-    write_html(graph, base + ".html")
+    write_html(graph, base + ".html", title=title)
     try:
-        write_xlsx(graph, base + ".xlsx")
+        write_xlsx(graph, base + ".xlsx", title=title)
         xlsx_note = base + ".xlsx"
     except ImportError:
         xlsx_note = "(openpyxl not installed - skipped .xlsx; pip install openpyxl)"
@@ -424,106 +434,3 @@ def cmd_trace(args, cfg):
     print(f"  {base}.html   (open / send this)")
     print(f"  {xlsx_note}")
     print(f"  {base}.json")
-
-
-_HTML_TEMPLATE = r"""<!doctype html>
-<html><head><meta charset="utf-8"><title>crawlbtc trace __ORIGIN__</title>
-<style>
-  :root{color-scheme:light dark}
-  body{margin:0;font:13px/1.4 system-ui,sans-serif;background:#0e1116;color:#e6edf3}
-  header{padding:10px 14px;background:#161b22;border-bottom:1px solid #30363d}
-  header b{color:#58a6ff}
-  .stats{display:flex;gap:18px;flex-wrap:wrap;margin-top:6px;color:#9da7b3}
-  .stats span{white-space:nowrap}
-  #wrap{display:flex;height:calc(100vh - 62px)}
-  svg{flex:1;background:#0e1116}
-  #side{width:320px;padding:12px;background:#161b22;border-left:1px solid #30363d;overflow:auto}
-  #side h3{margin:0 0 6px;font-size:13px;color:#58a6ff}
-  #side .a{word-break:break-all;font-family:ui-monospace,monospace;font-size:12px}
-  .k{color:#9da7b3}.v{color:#e6edf3}
-  line.edge{stroke:#3d4551;stroke-opacity:.6}
-  line.loop{stroke:#f85149;stroke-width:2;stroke-opacity:.9}
-  circle{cursor:pointer;stroke:#0e1116;stroke-width:1.5}
-  text.lbl{fill:#8b949e;font-size:9px;pointer-events:none}
-  .legend span{margin-right:12px}
-  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:middle;margin-right:4px}
-</style></head>
-<body>
-<header>
-  <div>crawlbtc trace — origin <b>__ORIGIN__</b></div>
-  <div class="stats">
-    <span>received <b>__RECV__</b> BTC</span>
-    <span>sent <b>__SENT__</b> BTC</span>
-    <span>depth __DEPTH__</span>
-    <span>__NODES__ addresses</span>
-    <span>__EDGES__ flows</span>
-    <span>loops to origin: <b>__LOOPS__</b></span>
-    <span class="legend"><span class="dot" style="background:#f0b72f"></span>origin
-      <span class="dot" style="background:#58a6ff"></span>depth1
-      <span class="dot" style="background:#3fb950"></span>depth2
-      <span class="dot" style="background:#a371f7"></span>depth3+
-      <span class="dot" style="background:#db6d28"></span>hub</span>
-    <span style="color:#6e7681">generated __GENERATED__</span>
-  </div>
-</header>
-<div id="wrap"><svg id="g"></svg>
-  <div id="side"><h3>click a node</h3><div id="info" class="k">Nodes are addresses; edges follow value outward. Red edges loop back to the origin. Drag to move, scroll to zoom.</div></div>
-</div>
-<script>
-const DATA = __DATA__;
-const svg = document.getElementById('g');
-const side = document.getElementById('info');
-const W = () => svg.clientWidth, H = () => svg.clientHeight;
-const COLORS = ['#f0b72f','#58a6ff','#3fb950','#a371f7'];
-function color(n){ if(n.hub) return '#db6d28'; if(n.origin) return COLORS[0]; return COLORS[Math.min(n.depth,3)]; }
-function radius(n){ return n.origin?12:Math.max(4,6+Math.log10((n.recv||0)+1)); }
-
-const nodes = DATA.nodes.map(n=>({...n,x:W()/2+(Math.random()-.5)*300,y:H()/2+(Math.random()-.5)*300,vx:0,vy:0}));
-const idx = {}; nodes.forEach(n=>idx[n.id]=n);
-const links = DATA.edges.filter(e=>idx[e.s]&&idx[e.t]).map(e=>({...e,source:idx[e.s],target:idx[e.t]}));
-
-const NS='http://www.w3.org/2000/svg';
-let vb={x:0,y:0,w:0,h:0,k:1};
-function el(t,a){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
-const gEdges=el('g'),gNodes=el('g'),gLabels=el('g');
-svg.append(gEdges,gNodes,gLabels);
-const lineEls=links.map(l=>{const e=el('line',{class:l.loop?'loop':'edge'});gEdges.append(e);return e;});
-const circleEls=nodes.map(n=>{const c=el('circle',{r:radius(n),fill:color(n)});c.addEventListener('click',()=>showInfo(n));c.addEventListener('mousedown',ev=>startDrag(ev,n));gNodes.append(c);return c;});
-const labelEls=nodes.map(n=>{const t=el('text',{class:'lbl'});t.textContent=(n.origin?'★ ':'')+n.id.slice(0,8)+'…';gLabels.append(t);return t;});
-
-function showInfo(n){
-  side.innerHTML='<div class="a">'+n.id+'</div><br>'+
-    row('depth',n.depth)+row('received (BTC)',n.recv)+row('sent (BTC)',n.sent)+
-    (n.origin?'<br><b style="color:#f0b72f">ORIGIN</b>':'')+(n.hub?'<br><b style="color:#db6d28">HUB (not expanded)</b>':'');
-  circleEls.forEach((c,i)=>c.setAttribute('stroke',nodes[i]===n?'#fff':'#0e1116'));
-}
-function row(k,v){return '<div><span class="k">'+k+':</span> <span class="v">'+v+'</span></div>';}
-
-// force sim
-function tick(){
-  for(const n of nodes){ if(n===drag) continue;
-    for(const m of nodes){ if(n===m)continue; let dx=n.x-m.x,dy=n.y-m.y,d2=dx*dx+dy*dy+.01; if(d2<40000){const f=800/d2;n.vx+=dx*f/Math.sqrt(d2);n.vy+=dy*f/Math.sqrt(d2);} }
-  }
-  for(const l of links){ let dx=l.target.x-l.source.x,dy=l.target.y-l.source.y,d=Math.sqrt(dx*dx+dy*dy)+.01,f=(d-90)*0.01;
-    if(l.source!==drag){l.source.vx+=dx/d*f;l.source.vy+=dy/d*f;} if(l.target!==drag){l.target.vx-=dx/d*f;l.target.vy-=dy/d*f;} }
-  for(const n of nodes){ if(n===drag)continue; n.vx+=(W()/2-n.x)*0.001;n.vy+=(H()/2-n.y)*0.001; n.x+=n.vx*=0.85;n.y+=n.vy*=0.85; }
-  links.forEach((l,i)=>{lineEls[i].setAttribute('x1',l.source.x);lineEls[i].setAttribute('y1',l.source.y);lineEls[i].setAttribute('x2',l.target.x);lineEls[i].setAttribute('y2',l.target.y);});
-  nodes.forEach((n,i)=>{circleEls[i].setAttribute('cx',n.x);circleEls[i].setAttribute('cy',n.y);labelEls[i].setAttribute('x',n.x+radius(n)+2);labelEls[i].setAttribute('y',n.y+3);});
-  requestAnimationFrame(tick);
-}
-// drag + zoom
-let drag=null,dox,doy;
-function startDrag(ev,n){drag=n;const p=pt(ev);dox=p.x-n.x;doy=p.y-n.y;ev.preventDefault();}
-window.addEventListener('mousemove',ev=>{if(drag){const p=pt(ev);drag.x=p.x-dox;drag.y=p.y-doy;drag.vx=drag.vy=0;}});
-window.addEventListener('mouseup',()=>drag=null);
-function pt(ev){const r=svg.getBoundingClientRect();return {x:(ev.clientX-r.left-vb.x)/vb.k,y:(ev.clientY-r.top-vb.y)/vb.k};}
-let pan=false,px,py;
-svg.addEventListener('mousedown',ev=>{if(ev.target===svg){pan=true;px=ev.clientX-vb.x;py=ev.clientY-vb.y;}});
-window.addEventListener('mousemove',ev=>{if(pan){vb.x=ev.clientX-px;vb.y=ev.clientY-py;apply();}});
-window.addEventListener('mouseup',()=>pan=false);
-svg.addEventListener('wheel',ev=>{ev.preventDefault();const s=ev.deltaY<0?1.1:0.9;vb.k*=s;apply();});
-function apply(){gEdges.setAttribute('transform',`translate(${vb.x},${vb.y}) scale(${vb.k})`);gNodes.setAttribute('transform',gEdges.getAttribute('transform'));gLabels.setAttribute('transform',gEdges.getAttribute('transform'));}
-tick();
-</script>
-</body></html>
-"""
