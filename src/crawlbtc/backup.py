@@ -303,11 +303,13 @@ def run_verify(cfg, args):
 
 
 def cmd_backup(args, cfg):
-    action = getattr(args, "action", "create") or "create"
+    action = getattr(args, "action", None) or "create"
+    # Allow `crawlbtc backup <path>` (path given as the first positional).
+    if action not in ("create", "verify"):
+        if getattr(args, "path", None) is None:
+            args.path = action
+        action = "create"
     if action == "create":
         run_backup(cfg, args)
-    elif action == "verify":
-        run_verify(cfg, args)
     else:
-        print(f"unknown backup action: {action}", file=sys.stderr)
-        sys.exit(2)
+        run_verify(cfg, args)
