@@ -162,11 +162,16 @@ def transaction_entropy(input_sats, output_sats, cap=14):
     # each cut is counted with its complement too; halve for distinct splits
     distinct = cuts // 2
     entropy = round(math.log2(1 + distinct), 3)
+    # Fee-unaware: a fee makes total inputs exceed total outputs, so an exact
+    # input-subset == output-subset match is only a heuristic for a sub-tx
+    # boundary. With many inputs AND many outputs, "no cut found" means the
+    # inputs *likely* jointly fund the outputs - suggestive, not proven.
     return {
         "atomic": distinct == 0,
         "cuts": distinct,
         "entropy_bits": entropy,
-        "note": ("atomic - who-paid-whom is deterministic" if distinct == 0
+        "note": ("no equal-sum sub-transaction found (fee-unaware); inputs likely "
+                 "jointly fund the outputs, but not proven" if distinct == 0
                  else f"{distinct} equal-sum split(s); linkage is ambiguous"),
     }
 
@@ -259,27 +264,26 @@ def _fetch_tx(cur, txid):
 
     # coin age per input: creation time of the consumed prevout
     if tx_time is not None:
+        # spending_vin is this tx's input index, so each input aligns to the
+        # exact prevout it spends - its value and age stay correctly paired.
         cur.execute("""
-            SELECT s.prev_txid, s.prev_vout, pt.received_time
+            SELECT s.spending_vin, pt.received_time
               FROM blockchain.spends s
               JOIN blockchain.transactions pt ON pt.txid = s.prev_txid
              WHERE s.spending_txid = %s;
         """, (txid,))
-        created = {(pt, pv): rt for pt, pv, rt in cur.fetchall()}
-        # match inputs to prevouts by order is unreliable; approximate age using
-        # the oldest/known creation times weighted by value below.
-        ages = []
-        for pt, pv in created:
-            rt = created[(pt, pv)]
+        age_by_vin = {}
+        for vin, rt in cur.fetchall():
             if rt is not None:
-                ages.append((tx_time - rt).total_seconds() / 86400.0)
-        # attach a per-input age when counts line up, else spread the known ages
-        for i, inp in enumerate(inputs):
-            inp["age_days"] = ages[i] if i < len(ages) else (ages[-1] if ages else 0.0)
+                age_by_vin[vin] = (tx_time - rt).total_seconds() / 86400.0
+        for inp in inputs:
+            inp["age_days"] = age_by_vin.get(inp["idx"], 0.0)
 
-    # freshness of output addresses (unseen as an output before this tx)
+    # freshness of output addresses (unseen as an output before this tx).
+    # Needs a reference time; without one, "< NULL" is always false and would
+    # mark every address fresh, so leave freshness unset instead.
     for o in outputs:
-        if not o.get("address"):
+        if not o.get("address") or tx_time is None:
             o["is_fresh"] = False
             continue
         cur.execute("""

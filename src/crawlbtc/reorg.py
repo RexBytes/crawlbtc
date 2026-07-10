@@ -38,17 +38,19 @@ async def _canonical_hashes(cfg, heights):
 
 
 # Delete every row owned by an orphaned block hash, then requeue its height.
-_REPAIR_SQL = """
-DELETE FROM blockchain.spends WHERE spent_block = %(h)s;
-DELETE FROM blockchain.transaction_io
- WHERE txid IN (SELECT txid FROM blockchain.transactions WHERE block_hash = %(h)s);
-DELETE FROM blockchain.transactions WHERE block_hash = %(h)s;
-DELETE FROM blockchain.blocks WHERE block_hash = %(h)s;
-UPDATE blockchain.block_jobs
-   SET vout_status = 'pending', vin_status = 'pending', address_status = 'pending',
-       features = 'none', updated_at = now()
- WHERE height = %(height)s;
-"""
+# Kept as separate statements: psycopg's parameterized (extended-protocol)
+# execute allows only one statement per call.
+_REPAIR_STEPS = (
+    "DELETE FROM blockchain.spends WHERE spent_block = %(h)s;",
+    "DELETE FROM blockchain.transaction_io "
+    " WHERE txid IN (SELECT txid FROM blockchain.transactions WHERE block_hash = %(h)s);",
+    "DELETE FROM blockchain.transactions WHERE block_hash = %(h)s;",
+    "DELETE FROM blockchain.blocks WHERE block_hash = %(h)s;",
+    "UPDATE blockchain.block_jobs "
+    "   SET vout_status = 'pending', vin_status = 'pending', address_status = 'pending', "
+    "       features = 'none', updated_at = now() "
+    " WHERE height = %(height)s;",
+)
 
 
 def cmd_detect_reorg(args, cfg):
@@ -97,8 +99,10 @@ def cmd_detect_reorg(args, cfg):
     with _connect(cfg) as conn:
         cur = conn.cursor()
         for h in divergent:
+            params = {"h": stored[h], "height": h}
             cur.execute("BEGIN;")
-            cur.execute(_REPAIR_SQL, {"h": stored[h], "height": h})
+            for stmt in _REPAIR_STEPS:
+                cur.execute(stmt, params)
             cur.execute("COMMIT;")
             print(f"  repaired height {h} (orphaned rows deleted, requeued)")
     print(f"\nrepaired {len(divergent)} height(s). Run `crawlbtc extract` to rebuild them, "

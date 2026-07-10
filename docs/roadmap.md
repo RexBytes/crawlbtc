@@ -31,6 +31,31 @@ direction, confidence, level, risk, entities, collapse, explorer links,
 print/PDF, related-wallet clustering, direct-vs-co-mingled attribution,
 progress, bounded/safe); unbranded reports + `--report-title`.
 
+## Done: the no-reindex batch (items #1–#9, #13, #14)
+
+Every roadmap item that needs no re-extract and no reindex is now shipped:
+
+- **#1 Fiat valuation** — `import-prices` + `trace --fiat CUR`; per-flow value
+  at the transaction date, in the xlsx/HTML/JSON.
+- **#2 Incremental balances** — `update-balances`; watermark-driven refresh of
+  only the touched addresses (seconds/minutes, not the multi-hour rebuild).
+- **#3 Global clusters** — `build-clusters`; common-input union-find via
+  iterative SQL label propagation, resumable, with `--stats`/`--lookup`.
+- **#4 Change detection**, **#5 coin-days-destroyed**, **#6 tx entropy /
+  Boltzmann-lite**, **#8 peel-chain / CoinJoin flags** — `analyze-tx <txid>`
+  (human or `--json`), pure transparent heuristics with reasons.
+- **#7 Amount+timing correlation** — `correlate`; time-index-bounded candidate
+  leads across a mixer/exchange break.
+- **#9 Topological service detection** — trace auto-labels exchange-like /
+  collector / distributor / hub nodes by degree shape, no tag needed.
+- **#13 Reorg handling** — `detect-reorg` (dry-run/`--apply`) repairs orphaned
+  blocks near the tip against the node's canonical hashes.
+- **#14 Encrypt watch_addresses keys** — `encrypt-keys` / `decrypt-keys`;
+  stdlib-only authenticated encryption (scrypt + HMAC-CTR + encrypt-then-MAC).
+
+Remaining (need a chain re-read or a full reindex — deferred): #10
+fingerprinting, #11 OP_RETURN/token layers, #12 raw scripts, #15 txid→bytea.
+
 ## Pending
 
 | # | Feature | What it adds | Impl | DB / run impact | Reindex? |

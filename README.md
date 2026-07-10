@@ -98,9 +98,18 @@ crawlbtc backfill-vins      # repair pass (only needed for verbosity-2 nodes / l
 crawlbtc requeue --phase vout --skipped     # reset blocks for reprocessing
 crawlbtc recompute-balances                 # exact watch_addresses rebuild from io/spends
 crawlbtc build-balances     # materialize EVERY address's balance into blockchain.address_balances
+crawlbtc update-balances    # incremental: refresh only addresses touched since the watermark
 
 crawlbtc trace <address>    # follow value outward -> interactive HTML graph + Excel + JSON
-                            #   --depth 3 --fanout 10 --max-nodes 750 --out DIR
+                            #   --depth 3 --fanout 10 --max-nodes 750 --fiat GBP --out DIR
+
+crawlbtc import-prices --currency GBP --csv prices.csv   # fiat valuation series for trace --fiat
+crawlbtc analyze-tx <txid>  # per-tx forensics: change output, coin-days-destroyed, entropy, shape
+crawlbtc build-clusters     # global common-input wallet clusters (--stats, --lookup <addr>)
+crawlbtc correlate --txid <txid> --vout 0                # bridge a mixer/exchange break (leads)
+crawlbtc detect-reorg       # find/repair orphaned blocks near the tip (--apply; needs node)
+crawlbtc encrypt-keys       # encrypt watch_addresses private keys in place (passphrase)
+crawlbtc decrypt-keys --address <addr>                   # recover a key (prints; --write-back persists)
 
 crawlbtc tags import-ofac   # load OFAC SDN sanctioned crypto addresses
 crawlbtc tags load-builtin  # load the shipped starter exchange list
