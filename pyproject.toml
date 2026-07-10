@@ -17,6 +17,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "structlog>=24.1",
     "orjson>=3.9",
+    "openpyxl>=3.1",
 ]
 
 [project.scripts]

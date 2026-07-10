@@ -98,6 +98,9 @@ crawlbtc backfill-vins      # repair pass (only needed for verbosity-2 nodes / l
 crawlbtc requeue --phase vout --skipped     # reset blocks for reprocessing
 crawlbtc recompute-balances                 # exact watch_addresses rebuild from io/spends
 crawlbtc build-balances     # materialize EVERY address's balance into blockchain.address_balances
+
+crawlbtc trace <address>    # follow value outward -> interactive HTML graph + Excel + JSON
+                            #   --depth 3 --fanout 10 --max-nodes 750 --out DIR
 ```
 
 `-P/--processes`, `-w/--workers`, `-b/--batch-size` override the auto-sizing

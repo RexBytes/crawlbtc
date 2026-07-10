@@ -120,6 +120,11 @@ def cmd_backup(args, cfg):
     _cmd_backup(args, cfg)
 
 
+def cmd_trace(args, cfg):
+    from .trace import cmd_trace as _cmd_trace
+    _cmd_trace(args, cfg)
+
+
 _BLOCK_FEATURES = {"vin", "vout", "both", "none", "op_return_only", "coinbase_only"}
 
 
@@ -375,6 +380,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("recompute-balances",
                        help="exact rebuild of watch_addresses balances from io/spends data")
     p.set_defaults(func=cmd_recompute_balances, needs_probe=False)
+
+    p = sub.add_parser("trace",
+                       help="follow value outward from an address -> interactive HTML + Excel")
+    p.add_argument("address", help="starting bitcoin address")
+    p.add_argument("--depth", type=int, default=3, help="hops to expand outward (default 3)")
+    p.add_argument("--fanout", type=int, default=10,
+                   help="max recipients kept per address, by value (default 10)")
+    p.add_argument("--max-nodes", type=int, default=750,
+                   help="hard cap on addresses in the graph (default 750)")
+    p.add_argument("--out", default=None, help="output directory (default: current dir)")
+    p.set_defaults(func=cmd_trace, needs_probe=False)
 
     p = sub.add_parser("backup",
                        help="consistent evidence-grade dump of the blockchain schema + manifest")
