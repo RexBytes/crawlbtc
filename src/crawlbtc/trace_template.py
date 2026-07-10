@@ -130,7 +130,7 @@ function graph(el){el.innerHTML=`<div style="margin-bottom:8px"><input id="q" pl
   <button class="act" onclick="fitG()">reset view</button>
   <span style="margin-left:10px;font-size:12px"><span class="dot" style="background:#f0b72f"></span>origin
   <span class="dot" style="background:#58a6ff"></span>d1 <span class="dot" style="background:#3fb950"></span>d2 <span class="dot" style="background:#a371f7"></span>d3
-  <span class="dot" style="background:#db6d28"></span>mixer <span class="dot" style="background:#f85149"></span>sanctioned · red edge=round-trip to owner · white ring=entity · gold ring=same owner · fade=confidence</span></div>
+  <span class="dot" style="background:#db6d28"></span>mixer <span class="dot" style="background:#f85149"></span>sanctioned · red edge=round-trip to owner · dashed edge=co-mingled (estimated) · white ring=entity · gold ring=same owner · fade=confidence</span></div>
   <div id="wrap"><svg id="g"></svg><div id="side" class="muted">Click a node (path from origin highlights). Click an edge for value + confidence. Addresses link to the block explorer.</div></div>`;
  initGraph(shaped());
 }
@@ -153,14 +153,14 @@ function sankey(el){const g=shaped();const cols={};g.nodes.forEach(n=>{const d=S
 function table(el){const g=shaped();el.innerHTML=`<div style="margin-bottom:8px"><input id="tf" placeholder="filter…" style="width:280px"><button class="act" onclick="dlCSV()">⬇ CSV</button></div><div id="tw"></div>`;
  const rows=g.edges.map(e=>{const s=g.nodes.find(n=>n.id===e.s)||{},t=g.nodes.find(n=>n.id===e.t)||{};
    const level=e.dir==='in'?(s.level||0):(t.level||0);
-   return{from:e.s,to:e.t,level,btc:e.v,txs:e.n,conf:Math.round((e.conf||1)*100),entity:t.entity||'',etype:t.etype||'',risk:t.risk||0,when:e.when||'',loop:e.loop?'↩':''};});
+   return{from:e.s,to:e.t,level,attr:e.cert?'direct':'co-mingled',btc:e.v,txs:e.n,conf:Math.round((e.conf||1)*100),entity:t.entity||'',etype:t.etype||'',risk:t.risk||0,when:e.when||'',loop:e.loop?'↩':''};});
  let sk='btc',dir=-1;
  window.TS=k=>{if(sk===k)dir=-dir;else{sk=k;dir=-1;}render();};
- window.dlCSV=()=>{const csv='from,to,level,btc,txs,confidence,entity,risk,when,loop\n'+rows.map(x=>[x.from,x.to,x.level,x.btc,x.txs,x.conf+'%',x.entity,x.risk,x.when,x.loop].join(',')).join('\n');const a=document.createElement('a');a.href='data:text/csv,'+encodeURIComponent(csv);a.download='flows.csv';a.click();};
+ window.dlCSV=()=>{const csv='from,to,level,attribution,btc,txs,confidence,entity,risk,when,loop\n'+rows.map(x=>[x.from,x.to,x.level,x.attr,x.btc,x.txs,x.conf+'%',x.entity,x.risk,x.when,x.loop].join(',')).join('\n');const a=document.createElement('a');a.href='data:text/csv,'+encodeURIComponent(csv);a.download='flows.csv';a.click();};
  function render(){const f=(document.getElementById('tf').value||'').toLowerCase();
   const r=rows.filter(x=>!f||x.from.includes(f)||x.to.includes(f)||x.entity.toLowerCase().includes(f)).sort((a,b)=>(a[sk]>b[sk]?1:-1)*dir);
-  document.getElementById('tw').innerHTML='<table><tr>'+['from','to','level','btc','txs','conf','entity','risk','when','loop'].map(k=>`<th onclick="TS('${k}')">${k==='level'?'level (hops)':k}</th>`).join('')+'</tr>'+
-   r.map(x=>`<tr><td>${alink(x.from)}</td><td>${alink(x.to)}</td><td class=mono>${sgn(x.level)}</td><td>${fmt(x.btc)}</td><td>${x.txs}</td><td class=muted>${x.conf}%</td><td>${x.entity?`<span class="badge b-${x.etype}">${x.entity}</span>`:''}</td><td>${x.risk?`<span class="badge ${['','r-low','r-med','r-high'][x.risk]}">${['','LOW','MED','HIGH'][x.risk]}</span>`:''}</td><td>${x.when}</td><td class=warn>${x.loop}</td></tr>`).join('')+'</table>';}
+  document.getElementById('tw').innerHTML='<table><tr>'+['from','to','level','attr','btc','txs','conf','entity','risk','when','loop'].map(k=>`<th onclick="TS('${k}')">${k==='level'?'level (hops)':k==='attr'?'attribution':k}</th>`).join('')+'</tr>'+
+   r.map(x=>`<tr><td>${alink(x.from)}</td><td>${alink(x.to)}</td><td class=mono>${sgn(x.level)}</td><td>${x.attr==='direct'?'<span class="badge r-low">direct</span>':'<span class="badge r-med">co-mingled</span>'}</td><td>${fmt(x.btc)}</td><td>${x.txs}</td><td class=muted>${x.conf}%</td><td>${x.entity?`<span class="badge b-${x.etype}">${x.entity}</span>`:''}</td><td>${x.risk?`<span class="badge ${['','r-low','r-med','r-high'][x.risk]}">${['','LOW','MED','HIGH'][x.risk]}</span>`:''}</td><td>${x.when}</td><td class=warn>${x.loop}</td></tr>`).join('')+'</table>';}
  document.getElementById('tf').oninput=render;render();
 }
 function entities(el){const g=shaped();const flagged=g.nodes.filter(n=>n.entity);const byType={};flagged.forEach(n=>(byType[n.etype]=byType[n.etype]||[]).push(n));
@@ -176,7 +176,8 @@ function timeline(el){const g=shaped();const byM={};g.edges.forEach(e=>{if(e.whe
  el.innerHTML='<div class="muted" style="margin-bottom:6px">Flow value by month ('+STATE.dir+') — spot bursts (cash-outs, layering).</div>'+s+'</svg>';
 }
 function method(el){el.innerHTML=`<h3>Fact vs. inference</h3><div class="note"><b>Fact:</b> that a coin moved and into which transaction (on-chain spend graph); amounts, addresses, times.<br><b>Inference:</b> payment-vs-change and intra-transaction value split — estimated, with uncertainty.</div>
- <h3>Value attribution</h3><p class="muted">Per-edge BTC uses the <b>haircut</b> model. <b>Confidence</b> shading fades with hop distance as haircut dilution and change-ambiguity compound; treat deep, faint edges as weaker.</p>
+ <h3>Fact vs. estimate, per flow</h3><p class="muted">The <b>spend link</b> (an output at the source was consumed by a transaction that paid the target) is a cryptographic fact — blocks order transactions but do not mix them. What may be estimated is the <b>value split inside a multi-input transaction</b>. Each flow is therefore labelled:<br>• <span class="badge r-low">direct</span> — the spending transaction had a <b>single input</b>, so the source solely funded it and the amount is a fact.<br>• <span class="badge r-med">co-mingled</span> (dashed edge) — the spending transaction had <b>multiple inputs</b>, so the source only contributed to a pooled payment; the per-flow amount is an estimate.</p>
+ <h3>Value attribution</h3><p class="muted">Co-mingled per-edge BTC uses the <b>haircut</b> model. <b>Confidence</b> shading fades with hop distance as haircut dilution and change-ambiguity compound; treat deep, faint edges as weaker.</p>
  <h3>Risk scoring</h3><p class="muted">Each address's risk = worst entity type on its path from the origin: <span class="badge r-high">HIGH</span> sanctioned, <span class="badge r-med">MED</span> mixer, <span class="badge r-low">LOW</span> exchange.</p>
  <h3>Related wallets (same owner)</h3><p class="muted">Gold-ringed addresses are likely controlled by the same entity as the origin (common-input-ownership: co-spent as inputs in one transaction). A red edge is value returning to that cluster — a round-trip. Bounded single-round; may miss wallets and can be defeated by CoinJoin.</p><h3>Bounds</h3><p class="muted">Fixed depth, per-node fan-out cap; hub/exchange/mixer addresses are flagged and not expanded (value becomes unattributable past them).</p>
  <h3>Provenance</h3><p class="muted">Full Bitcoin Core node at chain tip <b>${DATA.tip}</b>. Reproducible from the source database — keep this stamp for evidentiary integrity.</p>
@@ -193,7 +194,8 @@ function initGraph(g){const svg=document.getElementById('g'),NS='http://www.w3.o
  const mk=(t,at)=>{const e=document.createElementNS(NS,t);for(const k in at)e.setAttribute(k,at[k]);return e;};
  svg.innerHTML='';const gR=mk('g'),gE=mk('g'),gN=mk('g'),gT=mk('g');svg.append(gR,gE,gN,gT);
  const les=L.map(l=>{const e=mk('line',{class:l.loop?'loop':'edge'});e.setAttribute('stroke-opacity',STATE.conf?Math.max(.12,(l.conf||1)):.6);
-   e.addEventListener('click',()=>info(`<b>flow</b><br>${alink(l.s)} → ${alink(l.t)}<br>${fmt(l.v)} BTC · ${l.n} tx · conf ${Math.round((l.conf||1)*100)}%${l.loop?'<br><b class=warn>round-trip to owner</b>':''}`));gE.append(e);return e;});
+   if(!l.cert)e.setAttribute('stroke-dasharray','4 3');
+   e.addEventListener('click',()=>info(`<b>flow</b><br>${alink(l.s)} → ${alink(l.t)}<br>${fmt(l.v)} BTC · ${l.n} tx · conf ${Math.round((l.conf||1)*100)}%<br>${l.cert?'<b style="color:#3fb950">direct — single-input tx, attribution certain</b>':'<b style="color:#db6d28">co-mingled — multi-input tx, value estimated</b>'}${l.loop?'<br><b class=warn>round-trip to owner</b>':''}`));gE.append(e);return e;});
  const nes=N.map(n=>{const c=mk('circle',{r:rad(n),fill:color(n)});if(n.entity){c.setAttribute('stroke','#fff');c.setAttribute('stroke-width','2.5');}else if(n.owner){c.setAttribute('stroke','#f0b72f');c.setAttribute('stroke-width','2.5');c.setAttribute('stroke-dasharray','2 2');}
    c.addEventListener('click',()=>{info(`<div>${alink(n.id)}</div><br>level ${sgn(n.level||0)} (hops from origin) · ${riskBadge(n)}${n.owner?' <b style="color:#f0b72f">⚠ same owner</b>':''}<br>received ${fmt(n.recv)} BTC<br>sent ${fmt(n.sent)} BTC${n.entity?`<br><span class="badge b-${n.etype}">${n.entity}</span>`:''}${n.members&&n.members.length>1?`<br><span class=muted>${n.members.length} addresses collapsed</span>`:''}<br><br><button class=act onclick="navigator.clipboard.writeText('${n.id}')">copy</button> ${STATE.links&&!n.id.startsWith('ent:')?`<a class=act href="${exurl(n.id)}" target=_blank>explorer ↗</a>`:''}`);hlPath(n,les,L);});
    c.addEventListener('mousedown',e=>{G.drag=n;e.stopPropagation();});gN.append(c);return c;});

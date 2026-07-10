@@ -45,13 +45,20 @@ def _utxo_count(cur, address):
     return cur.fetchone()[0]
 
 
-def _outgoing_edges(cur, address, fanout):
-    """Top `fanout` recipients of value sent FROM `address`, haircut-weighted."""
+def _outgoing_edges(cur, address, fanout, max_utxos=2000):
+    """Top `fanout` recipients of value sent FROM `address`, haircut-weighted.
+
+    Only the `max_utxos` largest outputs of the address are followed, which
+    bounds the query on high-activity (many-small-UTXO) addresses regardless
+    of total transaction count.
+    """
     cur.execute("""
         WITH u_utxos AS (
             SELECT txid, idx, amount
               FROM blockchain.transaction_io
              WHERE address = %s AND io_type = 'out'
+             ORDER BY amount DESC
+             LIMIT %s
         ),
         spent AS (
             SELECT s.spending_txid, SUM(u.amount) AS u_in
@@ -59,6 +66,12 @@ def _outgoing_edges(cur, address, fanout):
               JOIN blockchain.spends s
                 ON s.prev_txid = u.txid AND s.prev_vout = u.idx
              GROUP BY s.spending_txid
+        ),
+        tx_in_counts AS (
+            SELECT sp.spending_txid, COUNT(*) AS n_inputs
+              FROM spent sp
+              JOIN blockchain.spends s2 ON s2.spending_txid = sp.spending_txid
+             GROUP BY sp.spending_txid
         ),
         tx_out AS (
             SELECT sp.spending_txid, o.address AS to_addr, SUM(o.amount) AS v_out
@@ -72,38 +85,49 @@ def _outgoing_edges(cur, address, fanout):
                SUM(t.v_out * (sp.u_in::numeric / NULLIF(tx.total_in, 0)))::bigint AS est_value,
                COUNT(DISTINCT t.spending_txid) AS tx_count,
                MIN(tx.received_time) AS first_seen,
-               MAX(tx.received_time) AS last_seen
+               MAX(tx.received_time) AS last_seen,
+               bool_and(tic.n_inputs = 1) AS all_single_input
           FROM tx_out t
           JOIN spent sp ON sp.spending_txid = t.spending_txid
+          JOIN tx_in_counts tic ON tic.spending_txid = t.spending_txid
           JOIN blockchain.transactions tx ON tx.txid = t.spending_txid
          GROUP BY t.to_addr
          ORDER BY est_value DESC NULLS LAST
          LIMIT %s;
-    """, (address, fanout))
+    """, (address, max_utxos, fanout))
     return cur.fetchall()
 
 
-def _incoming_edges(cur, address, fanout):
-    """Top `fanout` funders that paid value INTO `address`."""
+def _incoming_edges(cur, address, fanout, max_utxos=2000):
+    """Top `fanout` funders that paid value INTO `address` (bounded)."""
     cur.execute("""
         WITH u_recv AS (
             SELECT DISTINCT txid
               FROM blockchain.transaction_io
              WHERE address = %s AND io_type = 'out'
+             LIMIT %s
+        ),
+        recv_in_counts AS (
+            SELECT r.txid, COUNT(*) AS n_inputs
+              FROM u_recv r
+              JOIN blockchain.spends s ON s.spending_txid = r.txid
+             GROUP BY r.txid
         )
         SELECT i.address AS from_addr,
                SUM(i.amount)::bigint AS value_in,
                COUNT(DISTINCT i.txid) AS tx_count,
                MIN(tx.received_time) AS first_seen,
-               MAX(tx.received_time) AS last_seen
+               MAX(tx.received_time) AS last_seen,
+               bool_and(COALESCE(ric.n_inputs, 1) = 1) AS all_single_input
           FROM blockchain.transaction_io i
           JOIN u_recv r ON r.txid = i.txid
           JOIN blockchain.transactions tx ON tx.txid = i.txid
+          LEFT JOIN recv_in_counts ric ON ric.txid = i.txid
          WHERE i.io_type = 'in' AND i.address IS NOT NULL
          GROUP BY i.address
          ORDER BY value_in DESC NULLS LAST
          LIMIT %s;
-    """, (address, fanout))
+    """, (address, max_utxos, fanout))
     return cur.fetchall()
 
 
@@ -142,7 +166,7 @@ def _addr_totals(cur, address):
     return int(recv), int(sent)
 
 
-def _origin_cluster(cur, origin, tx_cap=3000, addr_cap=8000):
+def _origin_cluster(cur, origin, tx_cap=2000, addr_cap=8000):
     """Addresses probably owned by the SAME entity as `origin`.
 
     Common-input-ownership heuristic: addresses co-spent as inputs in the
@@ -173,7 +197,7 @@ def _origin_cluster(cur, origin, tx_cap=3000, addr_cap=8000):
 
 
 def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=True,
-                timeout=60, progress=True):
+                timeout=60, progress=True, max_utxos=2000):
     t0 = time.time()
 
     def tick(msg):
@@ -233,14 +257,15 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
                     if _utxo_count(cur, addr) > HUB_UTXO_THRESHOLD and addr != origin:
                         nodes[addr]["is_hub"] = True
                         continue
-                    rows = (_outgoing_edges if dir_ == "out" else _incoming_edges)(cur, addr, fanout)
+                    rows = (_outgoing_edges if dir_ == "out" else _incoming_edges)(
+                        cur, addr, fanout, max_utxos)
                 except psycopg.errors.QueryCanceled:
                     timeouts[0] += 1
                     nodes[addr]["timed_out"] = True
                     continue
                 if len(rows) >= fanout:
                     nodes[addr]["truncated"] = True
-                for other, est_value, tx_count, first_seen, last_seen in rows:
+                for other, est_value, tx_count, first_seen, last_seen, single_in in rows:
                     if other is None:
                         continue
                     ensure_node(other, d + 1, dir_)
@@ -255,6 +280,10 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
                         "dir": dir_,
                         "confidence": round(max(0.15, 0.8 ** d), 3),
                         "returns_to_owner": returns_to_owner,
+                        # single-input spending tx => value attribution is a
+                        # fact (sole funder); multi-input => co-mingled/estimated.
+                        "attribution": "direct" if single_in else "co-mingled",
+                        "certain": bool(single_in),
                     }
                     edges.append(edge)
                     if returns_to_owner:
@@ -272,7 +301,7 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
 
         # Origin's immediate funders, for the incoming-context panel.
         try:
-            inc_rows = _incoming_edges(cur, origin, fanout)
+            inc_rows = _incoming_edges(cur, origin, fanout, max_utxos)
         except psycopg.errors.QueryCanceled:
             timeouts[0] += 1
             inc_rows = []
@@ -280,7 +309,8 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
             "address": fr, "value_btc": (v or 0) / SATS, "tx_count": tc,
             "first_seen": str(fs) if fs else None, "last_seen": str(ls) if ls else None,
             "same_owner": fr in cluster_addrs,
-        } for fr, v, tc, fs, ls in inc_rows]
+            "attribution": "direct" if single_in else "co-mingled",
+        } for fr, v, tc, fs, ls, single_in in inc_rows]
 
         # Known-entity labels.
         for addr, (name, cat, src) in _entity_lookup(cur, nodes.keys()).items():
@@ -312,6 +342,8 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
                 "round_trips_to_owner": len(loops),
                 "node_count": len(nodes),
                 "edge_count": len(edges),
+                "direct_flows": sum(1 for e in edges if e["certain"]),
+                "comingled_flows": sum(1 for e in edges if not e["certain"]),
                 "capped": len(nodes) >= max_nodes,
                 "query_timeouts": timeouts[0],
             },
@@ -373,13 +405,14 @@ def write_xlsx(graph, path, title="Bitcoin address trace"):
                    round(n["total_received_btc"], 8), round(n["total_sent_btc"], 8)])
 
     ws = wb.create_sheet("Flows (edges)")
-    ws.append(["from", "to", "dir", "est_value_btc", "tx_count", "confidence",
+    ws.append(["from", "to", "dir", "attribution", "est_value_btc", "tx_count", "confidence",
                "returns_to_owner", "first_seen", "last_seen"])
     for c in ws[1]:
         c.font = bold
     for e in sorted(graph["edges"], key=lambda x: -x["value_btc"]):
-        ws.append([e["from"], e["to"], e["dir"], round(e["value_btc"], 8), e["tx_count"],
-                   e["confidence"], e["returns_to_owner"], e["first_seen"], e["last_seen"]])
+        ws.append([e["from"], e["to"], e["dir"], e["attribution"], round(e["value_btc"], 8),
+                   e["tx_count"], e["confidence"], e["returns_to_owner"],
+                   e["first_seen"], e["last_seen"]])
 
     ws = wb.create_sheet("Origin incoming")
     ws.append(["funder_address", "value_btc", "tx_count", "same_owner", "first_seen", "last_seen"])
@@ -417,7 +450,8 @@ def write_html(graph, path, title="Bitcoin address trace report"):
                    "sent": round(n["total_sent_btc"], 6)} for n in graph["nodes"]],
         "edges": [{"s": e["from"], "t": e["to"], "v": round(e["value_btc"], 6),
                    "n": e["tx_count"], "when": when(e), "dir": e["dir"],
-                   "loop": e["returns_to_owner"]} for e in graph["edges"]],
+                   "loop": e["returns_to_owner"], "cert": e["certain"]}
+                  for e in graph["edges"]],
     }
     html = TEMPLATE.replace("__DATA__", json.dumps(data))
     with open(path, "w") as f:
@@ -442,7 +476,7 @@ def cmd_trace(args, cfg):
     try:
         graph = build_graph(cfg, origin, args.depth, args.fanout, args.max_nodes,
                             direction=args.direction, cluster=not args.no_cluster,
-                            timeout=args.timeout)
+                            timeout=args.timeout, max_utxos=args.max_utxos)
     except psycopg.errors.QueryCanceled:
         print(f"the origin's own query timed out ({args.timeout}s). The address is very "
               f"busy or the cache is cold (e.g. just after a backup). Retry (cache warms), "
@@ -451,7 +485,8 @@ def cmd_trace(args, cfg):
 
     s = graph["origin_summary"]
     print(f"  received {s['total_received_btc']:.8f} BTC, sent {s['total_sent_btc']:.8f} BTC")
-    print(f"  graph: {s['node_count']} addresses, {s['edge_count']} flows")
+    print(f"  graph: {s['node_count']} addresses, {s['edge_count']} flows "
+          f"({s['direct_flows']} direct/certain, {s['comingled_flows']} co-mingled/estimated)")
     print(f"  related wallets (same owner): {s['related_wallets']} "
           f"(origin cluster {s['cluster_size']}), round-trips to owner: {s['round_trips_to_owner']}"
           + ("  [hit node cap]" if s["capped"] else ""))
