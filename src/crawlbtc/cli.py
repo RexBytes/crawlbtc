@@ -417,8 +417,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("backup",
                        help="consistent evidence-grade dump of the blockchain schema + manifest")
-    p.add_argument("action", nargs="?", choices=["create", "verify"], default="create",
-                   help="create (default) or verify an existing dump")
+    p.add_argument("action", nargs="?", default="create",
+                   help="create (default) or verify; or just give a path to create there")
     p.add_argument("path", nargs="?", default=None,
                    help="create: output dir (a blockchain_<timestamp> subdir is made); "
                         "verify: the dump dir to check")
