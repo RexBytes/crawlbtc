@@ -23,7 +23,6 @@ from collections import deque
 
 import psycopg
 
-from . import __version__
 from .trace_template import TEMPLATE
 
 SATS = 100_000_000
@@ -268,7 +267,6 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
             "origin": origin,
             "generated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "tip": f"db height {tip_height}" if tip_height is not None else "unknown",
-            "version": f"crawlbtc {__version__}",
             "params": {"depth": depth, "fanout": fanout, "max_nodes": max_nodes,
                        "direction": direction, "clustering": cluster,
                        "hub_threshold": HUB_UTXO_THRESHOLD},
@@ -298,7 +296,7 @@ def write_json(graph, path):
         json.dump(graph, f, indent=2)
 
 
-def write_xlsx(graph, path):
+def write_xlsx(graph, path, title="Bitcoin address trace"):
     from openpyxl import Workbook
     from openpyxl.styles import Font
 
@@ -309,7 +307,7 @@ def write_xlsx(graph, path):
     ws.title = "Summary"
     s = graph["origin_summary"]
     rows = [
-        ("crawlbtc address trace", ""),
+        (title, ""),
         ("origin", graph["origin"]),
         ("generated", graph["generated"]),
         ("direction", graph["params"]["direction"]),
@@ -367,16 +365,16 @@ def write_xlsx(graph, path):
     wb.save(path)
 
 
-def write_html(graph, path):
+def write_html(graph, path, title="Bitcoin address trace report"):
     """Render the full multi-tab report (see trace_template.TEMPLATE)."""
     def when(e):
         fs = e.get("first_seen")
         return fs[:7] if fs else ""
     data = {
+        "title": title,
         "origin": graph["origin"],
         "generated": graph["generated"],
         "tip": graph.get("tip", "unknown"),
-        "version": graph.get("version", "crawlbtc"),
         "explorer": "https://mempool.space",
         "nodes": [{"id": n["address"], "depth": n["depth"], "side": n["side"],
                    "origin": n["is_origin"], "hub": n["is_hub"], "owner": n["same_owner"],
@@ -422,11 +420,12 @@ def cmd_trace(args, cfg):
           f"(origin cluster {s['cluster_size']}), round-trips to owner: {s['round_trips_to_owner']}"
           + ("  [hit node cap]" if s["capped"] else ""))
 
+    title = args.report_title or "Bitcoin address trace report"
     base = os.path.join(out_dir, f"{origin}_trace")
     write_json(graph, base + ".json")
-    write_html(graph, base + ".html")
+    write_html(graph, base + ".html", title=title)
     try:
-        write_xlsx(graph, base + ".xlsx")
+        write_xlsx(graph, base + ".xlsx", title=title)
         xlsx_note = base + ".xlsx"
     except ImportError:
         xlsx_note = "(openpyxl not installed - skipped .xlsx; pip install openpyxl)"

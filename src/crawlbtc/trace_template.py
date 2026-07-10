@@ -1,4 +1,4 @@
-TEMPLATE = r'''<!doctype html><html><head><meta charset="utf-8"><title>crawlbtc trace report</title>
+TEMPLATE = r'''<!doctype html><html><head><meta charset="utf-8"><title>Trace report</title>
 <style>
 :root{color-scheme:dark}*{box-sizing:border-box}
 body{margin:0;font:13px/1.45 system-ui,sans-serif;background:#0e1116;color:#e6edf3}
@@ -41,8 +41,8 @@ h3{color:#58a6ff;margin:14px 0 6px}.muted{color:#8b949e}
 }
 </style></head><body>
 <header>
- <div>crawlbtc trace report — origin <b class="mono" id="orig"></b></div>
- <div class="sub">chain tip <span id="tip"></span> · <span id="ver"></span> · <span id="gen"></span></div>
+ <div><b id="rtitle"></b> — origin <b class="mono" id="orig"></b></div>
+ <div class="sub">chain tip <span id="tip"></span> · <span id="gen"></span></div>
  <div class="toolbar">
   <label>direction</label>
   <select id="dir"><option value="out">outgoing (where it went)</option><option value="in">incoming (where it came from)</option><option value="both">both</option></select>
@@ -57,9 +57,11 @@ h3{color:#58a6ff;margin:14px 0 6px}.muted{color:#8b949e}
 <script>
 const DATA=__DATA__;
 const STATE={dir:'out',collapse:false,links:true,conf:true};
+const RTITLE=DATA.title||'Bitcoin address trace report';
+document.getElementById('rtitle').textContent=RTITLE;
+document.title=RTITLE;
 document.getElementById('orig').textContent=DATA.origin;
 document.getElementById('tip').textContent=DATA.tip;
-document.getElementById('ver').textContent=DATA.version;
 document.getElementById('gen').textContent=DATA.generated;
 const fmt=x=>Number(x).toLocaleString(undefined,{maximumFractionDigits:6});
 const short=s=>s.startsWith('ent:')?s.slice(4):s.slice(0,10)+'…'+s.slice(-4);
@@ -177,7 +179,7 @@ function method(el){el.innerHTML=`<h3>Fact vs. inference</h3><div class="note"><
  <h3>Value attribution</h3><p class="muted">Per-edge BTC uses the <b>haircut</b> model. <b>Confidence</b> shading fades with hop distance as haircut dilution and change-ambiguity compound; treat deep, faint edges as weaker.</p>
  <h3>Risk scoring</h3><p class="muted">Each address's risk = worst entity type on its path from the origin: <span class="badge r-high">HIGH</span> sanctioned, <span class="badge r-med">MED</span> mixer, <span class="badge r-low">LOW</span> exchange.</p>
  <h3>Related wallets (same owner)</h3><p class="muted">Gold-ringed addresses are likely controlled by the same entity as the origin (common-input-ownership: co-spent as inputs in one transaction). A red edge is value returning to that cluster — a round-trip. Bounded single-round; may miss wallets and can be defeated by CoinJoin.</p><h3>Bounds</h3><p class="muted">Fixed depth, per-node fan-out cap; hub/exchange/mixer addresses are flagged and not expanded (value becomes unattributable past them).</p>
- <h3>Provenance</h3><p class="muted">Full Bitcoin Core node at chain tip <b>${DATA.tip}</b>, ${DATA.version}. Reproducible from the database — keep this stamp for evidentiary integrity.</p>
+ <h3>Provenance</h3><p class="muted">Full Bitcoin Core node at chain tip <b>${DATA.tip}</b>. Reproducible from the source database — keep this stamp for evidentiary integrity.</p>
  <p class="muted" style="margin-top:14px;font-size:11px">Estimates for investigative use; verify before evidentiary reliance.</p>`;
 }
 // ---------- force graph ----------
@@ -191,7 +193,7 @@ function initGraph(g){const svg=document.getElementById('g'),NS='http://www.w3.o
  const mk=(t,at)=>{const e=document.createElementNS(NS,t);for(const k in at)e.setAttribute(k,at[k]);return e;};
  svg.innerHTML='';const gR=mk('g'),gE=mk('g'),gN=mk('g'),gT=mk('g');svg.append(gR,gE,gN,gT);
  const les=L.map(l=>{const e=mk('line',{class:l.loop?'loop':'edge'});e.setAttribute('stroke-opacity',STATE.conf?Math.max(.12,(l.conf||1)):.6);
-   e.addEventListener('click',()=>info(`<b>flow</b><br>${alink(l.s)} → ${alink(l.t)}<br>${fmt(l.v)} BTC · ${l.n} tx · conf ${Math.round((l.conf||1)*100)}%${l.loop?'<br><b class=warn>loops to origin</b>':''}`));gE.append(e);return e;});
+   e.addEventListener('click',()=>info(`<b>flow</b><br>${alink(l.s)} → ${alink(l.t)}<br>${fmt(l.v)} BTC · ${l.n} tx · conf ${Math.round((l.conf||1)*100)}%${l.loop?'<br><b class=warn>round-trip to owner</b>':''}`));gE.append(e);return e;});
  const nes=N.map(n=>{const c=mk('circle',{r:rad(n),fill:color(n)});if(n.entity){c.setAttribute('stroke','#fff');c.setAttribute('stroke-width','2.5');}else if(n.owner){c.setAttribute('stroke','#f0b72f');c.setAttribute('stroke-width','2.5');c.setAttribute('stroke-dasharray','2 2');}
    c.addEventListener('click',()=>{info(`<div>${alink(n.id)}</div><br>level ${sgn(n.level||0)} (hops from origin) · ${riskBadge(n)}${n.owner?' <b style="color:#f0b72f">⚠ same owner</b>':''}<br>received ${fmt(n.recv)} BTC<br>sent ${fmt(n.sent)} BTC${n.entity?`<br><span class="badge b-${n.etype}">${n.entity}</span>`:''}${n.members&&n.members.length>1?`<br><span class=muted>${n.members.length} addresses collapsed</span>`:''}<br><br><button class=act onclick="navigator.clipboard.writeText('${n.id}')">copy</button> ${STATE.links&&!n.id.startsWith('ent:')?`<a class=act href="${exurl(n.id)}" target=_blank>explorer ↗</a>`:''}`);hlPath(n,les,L);});
    c.addEventListener('mousedown',e=>{G.drag=n;e.stopPropagation();});gN.append(c);return c;});
@@ -247,8 +249,8 @@ function stepG(){const {N,L,les,nes,tes,rad,svg}=G;const Wd=svg.clientWidth,Hd=s
 function doPrint(){const g=shaped();const origin=g.nodes.find(n=>n.origin)||{recv:0,sent:0};
  const ex=entExposure(g,'exchange'),mx=entExposure(g,'mixer'),sn=entExposure(g,'sanctioned');
  const top=[...g.edges].sort((a,b)=>b.v-a.v).slice(0,15);
- document.getElementById('printview').innerHTML=`<h1>Bitcoin trace report</h1>
-  <p><b>Origin:</b> ${DATA.origin}<br><b>Direction:</b> ${STATE.dir}<br><b>Chain tip:</b> ${DATA.tip} · ${DATA.version}<br><b>Generated:</b> ${DATA.generated}</p>
+ document.getElementById('printview').innerHTML=`<h1>${RTITLE}</h1>
+  <p><b>Origin:</b> ${DATA.origin}<br><b>Direction:</b> ${STATE.dir}<br><b>Chain tip:</b> ${DATA.tip}<br><b>Generated:</b> ${DATA.generated}</p>
   <h2>Summary</h2><p>Received ${fmt(origin.recv)} BTC · Sent ${fmt(origin.sent)} BTC · ${g.nodes.length} addresses · ${g.edges.length} flows.</p>
   <h2>Entity exposure</h2><p>Exchange: ${fmt(ex)} BTC · Mixer: ${fmt(mx)} BTC · Sanctioned: ${fmt(sn)} BTC</p>
   <h2>Largest flows</h2><table><tr><th>from</th><th>to</th><th>BTC</th><th>conf</th><th>entity</th></tr>
