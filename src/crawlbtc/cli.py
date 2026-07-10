@@ -310,6 +310,17 @@ def _run_build_balances(cfg, args):
         funded, total = cur.fetchone()
         print(f"addresses with balance > 0: {funded:,}; total tracked: {total:,} sats "
               f"({total / 100_000_000:,.2f} BTC)")
+        # Seed the incremental watermark so `update-balances` can take over.
+        from .balances import fully_processed_frontier, write_watermark
+        frontier = fully_processed_frontier(cur)
+        write_watermark(cur, frontier)
+        print(f"balance watermark set to height {frontier:,} "
+              f"(future top-ups: `crawlbtc update-balances`)")
+
+
+def cmd_update_balances(args, cfg):
+    from .balances import cmd_update_balances as _cmd
+    _cmd(args, cfg)
 
 
 def cmd_recompute_balances(args, cfg):
@@ -456,6 +467,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--work-mem", default="1GB", metavar="SIZE",
                    help="session work_mem for the aggregation (default 1GB)")
     p.set_defaults(func=cmd_build_balances, needs_probe=False)
+
+    p = sub.add_parser("update-balances",
+                       help="incrementally refresh address_balances for blocks since the watermark")
+    p.add_argument("--work-mem", default="1GB", metavar="SIZE",
+                   help="session work_mem for the recompute (default 1GB)")
+    p.set_defaults(func=cmd_update_balances, needs_probe=False)
 
     return parser
 

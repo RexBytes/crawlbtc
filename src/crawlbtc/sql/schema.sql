@@ -148,6 +148,14 @@ CREATE TABLE IF NOT EXISTS blockchain.btc_prices (
 );
 CREATE INDEX IF NOT EXISTS btc_prices_currency_idx ON blockchain.btc_prices (currency, ts);
 
+-- Incremental-balance watermark (see `crawlbtc update-balances`): the
+-- fully-processed height that a materialized table is exact up to.
+CREATE TABLE IF NOT EXISTS blockchain.balance_watermark (
+    name       text PRIMARY KEY,
+    height     integer NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL
+);
+
 -- Materialized every-address balances, rebuilt by `crawlbtc build-balances`.
 CREATE TABLE IF NOT EXISTS blockchain.address_balances (
     address text PRIMARY KEY,
