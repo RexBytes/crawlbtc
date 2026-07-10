@@ -137,6 +137,17 @@ CREATE INDEX IF NOT EXISTS entity_tags_address_idx  ON blockchain.entity_tags (a
 CREATE INDEX IF NOT EXISTS entity_tags_category_idx ON blockchain.entity_tags (category);
 CREATE INDEX IF NOT EXISTS entity_tags_source_idx   ON blockchain.entity_tags (source);
 
+-- Historical BTC price series for fiat valuation (`crawlbtc import-prices`).
+CREATE TABLE IF NOT EXISTS blockchain.btc_prices (
+    ts        date NOT NULL,
+    currency  text NOT NULL,
+    price     numeric NOT NULL,
+    source    text,
+    added_at  timestamptz DEFAULT now() NOT NULL,
+    CONSTRAINT btc_prices_pkey PRIMARY KEY (ts, currency)
+);
+CREATE INDEX IF NOT EXISTS btc_prices_currency_idx ON blockchain.btc_prices (currency, ts);
+
 -- Materialized every-address balances, rebuilt by `crawlbtc build-balances`.
 CREATE TABLE IF NOT EXISTS blockchain.address_balances (
     address text PRIMARY KEY,

@@ -56,11 +56,12 @@ h3{color:#58a6ff;margin:14px 0 6px}.muted{color:#8b949e}
 <div id="printview"></div>
 <script>
 const DATA=__DATA__;
-const STATE={dir:'out',collapse:false,links:true,conf:true};
+const STATE={dir:DATA.direction||'out',collapse:false,links:true,conf:true};
 const RTITLE=DATA.title||'Bitcoin address trace report';
 document.getElementById('rtitle').textContent=RTITLE;
 document.title=RTITLE;
 document.getElementById('orig').textContent=DATA.origin;
+{const _d=document.getElementById('dir');if(_d)_d.value=STATE.dir;}
 document.getElementById('tip').textContent=DATA.tip;
 document.getElementById('gen').textContent=DATA.generated;
 const fmt=x=>Number(x).toLocaleString(undefined,{maximumFractionDigits:6});
@@ -151,16 +152,18 @@ function sankey(el){const g=shaped();const cols={};g.nodes.forEach(n=>{const d=S
  el.innerHTML=`<div class="muted" style="margin-bottom:6px">Value by hop (${STATE.dir}). Bar height ∝ BTC; ribbon width ∝ flow; opacity ∝ confidence.</div>`+s;
 }
 function table(el){const g=shaped();el.innerHTML=`<div style="margin-bottom:8px"><input id="tf" placeholder="filter…" style="width:280px"><button class="act" onclick="dlCSV()">⬇ CSV</button></div><div id="tw"></div>`;
+ const FIAT=DATA.fiat;
  const rows=g.edges.map(e=>{const s=g.nodes.find(n=>n.id===e.s)||{},t=g.nodes.find(n=>n.id===e.t)||{};
    const level=e.dir==='in'?(s.level||0):(t.level||0);
-   return{from:e.s,to:e.t,level,attr:e.cert?'direct':'co-mingled',btc:e.v,txs:e.n,conf:Math.round((e.conf||1)*100),entity:t.entity||'',etype:t.etype||'',risk:t.risk||0,when:e.when||'',loop:e.loop?'↩':''};});
+   return{from:e.s,to:e.t,level,attr:e.cert?'direct':'co-mingled',btc:e.v,fiat:e.vf,txs:e.n,conf:Math.round((e.conf||1)*100),entity:t.entity||'',etype:t.etype||'',risk:t.risk||0,when:e.when||'',loop:e.loop?'↩':''};});
  let sk='btc',dir=-1;
+ const cols=['from','to','level','attr','btc'].concat(FIAT?['fiat']:[]).concat(['txs','conf','entity','risk','when','loop']);
  window.TS=k=>{if(sk===k)dir=-dir;else{sk=k;dir=-1;}render();};
- window.dlCSV=()=>{const csv='from,to,level,attribution,btc,txs,confidence,entity,risk,when,loop\n'+rows.map(x=>[x.from,x.to,x.level,x.attr,x.btc,x.txs,x.conf+'%',x.entity,x.risk,x.when,x.loop].join(',')).join('\n');const a=document.createElement('a');a.href='data:text/csv,'+encodeURIComponent(csv);a.download='flows.csv';a.click();};
+ window.dlCSV=()=>{const csv=cols.join(',')+'\n'+rows.map(x=>cols.map(k=>k==='attr'?x.attr:k==='conf'?x.conf+'%':x[k]).join(',')).join('\n');const a=document.createElement('a');a.href='data:text/csv,'+encodeURIComponent(csv);a.download='flows.csv';a.click();};
  function render(){const f=(document.getElementById('tf').value||'').toLowerCase();
   const r=rows.filter(x=>!f||x.from.includes(f)||x.to.includes(f)||x.entity.toLowerCase().includes(f)).sort((a,b)=>(a[sk]>b[sk]?1:-1)*dir);
-  document.getElementById('tw').innerHTML='<table><tr>'+['from','to','level','attr','btc','txs','conf','entity','risk','when','loop'].map(k=>`<th onclick="TS('${k}')">${k==='level'?'level (hops)':k==='attr'?'attribution':k}</th>`).join('')+'</tr>'+
-   r.map(x=>`<tr><td>${alink(x.from)}</td><td>${alink(x.to)}</td><td class=mono>${sgn(x.level)}</td><td>${x.attr==='direct'?'<span class="badge r-low">direct</span>':'<span class="badge r-med">co-mingled</span>'}</td><td>${fmt(x.btc)}</td><td>${x.txs}</td><td class=muted>${x.conf}%</td><td>${x.entity?`<span class="badge b-${x.etype}">${x.entity}</span>`:''}</td><td>${x.risk?`<span class="badge ${['','r-low','r-med','r-high'][x.risk]}">${['','LOW','MED','HIGH'][x.risk]}</span>`:''}</td><td>${x.when}</td><td class=warn>${x.loop}</td></tr>`).join('')+'</table>';}
+  document.getElementById('tw').innerHTML='<table><tr>'+cols.map(k=>`<th onclick="TS('${k}')">${k==='level'?'level (hops)':k==='attr'?'attribution':k==='fiat'?FIAT:k}</th>`).join('')+'</tr>'+
+   r.map(x=>`<tr><td>${alink(x.from)}</td><td>${alink(x.to)}</td><td class=mono>${sgn(x.level)}</td><td>${x.attr==='direct'?'<span class="badge r-low">direct</span>':'<span class="badge r-med">co-mingled</span>'}</td><td>${fmt(x.btc)}</td>${FIAT?`<td>${x.fiat!=null?fmt(x.fiat):'—'}</td>`:''}<td>${x.txs}</td><td class=muted>${x.conf}%</td><td>${x.entity?`<span class="badge b-${x.etype}">${x.entity}</span>`:''}</td><td>${x.risk?`<span class="badge ${['','r-low','r-med','r-high'][x.risk]}">${['','LOW','MED','HIGH'][x.risk]}</span>`:''}</td><td>${x.when}</td><td class=warn>${x.loop}</td></tr>`).join('')+'</table>';}
  document.getElementById('tf').oninput=render;render();
 }
 function entities(el){const g=shaped();const flagged=g.nodes.filter(n=>n.entity);const byType={};flagged.forEach(n=>(byType[n.etype]=byType[n.etype]||[]).push(n));

@@ -130,6 +130,11 @@ def cmd_tags(args, cfg):
     _cmd_tags(args, cfg)
 
 
+def cmd_import_prices(args, cfg):
+    from .prices import cmd_import_prices as _cmd
+    _cmd(args, cfg)
+
+
 _BLOCK_FEATURES = {"vin", "vout", "both", "none", "op_return_only", "coinbase_only"}
 
 
@@ -403,6 +408,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-utxos", type=int, default=2000,
                    help="follow only the N largest outputs per address (bounds busy "
                         "high-UTXO addresses; default 2000)")
+    p.add_argument("--fiat", default=None, metavar="CUR",
+                   help="value each flow in this currency at the tx date (needs import-prices)")
     p.add_argument("--report-title", default=None,
                    help="title shown on the report (default: neutral, no tool branding)")
     p.add_argument("--out", default=None, help="output directory (default: current dir)")
@@ -421,6 +428,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--search", default=None, help="list: filter by address/name substring")
     p.add_argument("--limit", type=int, default=100, help="list: max rows")
     p.set_defaults(func=cmd_tags, needs_probe=False)
+
+    p = sub.add_parser("import-prices", help="load a historical BTC price CSV for fiat valuation")
+    p.add_argument("--csv", required=True, help="CSV file with date,price columns")
+    p.add_argument("--currency", default="USD", help="currency label for these prices (default USD)")
+    p.add_argument("--source", default=None, help="provenance label (default: filename)")
+    p.set_defaults(func=cmd_import_prices, needs_probe=False)
 
     p = sub.add_parser("backup",
                        help="consistent evidence-grade dump of the blockchain schema + manifest")

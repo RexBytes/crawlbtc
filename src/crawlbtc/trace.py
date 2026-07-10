@@ -68,10 +68,17 @@ def _outgoing_edges(cur, address, fanout, max_utxos=2000):
              GROUP BY s.spending_txid
         ),
         tx_in_counts AS (
-            SELECT sp.spending_txid, COUNT(*) AS n_inputs
+            -- We only ever test n_inputs = 1 (direct vs co-mingled), so the
+            -- exact input count is irrelevant past 2. Capping with LIMIT 2
+            -- means a huge consolidation/sweep tx (thousands of inputs) reads
+            -- 2 spends rows instead of all of them - this is what kept the
+            -- outgoing query from finishing on high-activity addresses.
+            SELECT sp.spending_txid,
+                   (SELECT count(*) FROM (
+                        SELECT 1 FROM blockchain.spends s2
+                         WHERE s2.spending_txid = sp.spending_txid
+                         LIMIT 2) _c) AS n_inputs
               FROM spent sp
-              JOIN blockchain.spends s2 ON s2.spending_txid = sp.spending_txid
-             GROUP BY sp.spending_txid
         ),
         tx_out AS (
             SELECT sp.spending_txid, o.address AS to_addr, SUM(o.amount) AS v_out
@@ -197,7 +204,7 @@ def _origin_cluster(cur, origin, tx_cap=2000, addr_cap=8000):
 
 
 def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=True,
-                timeout=60, progress=True, max_utxos=2000):
+                timeout=60, progress=True, max_utxos=2000, fiat=None):
     t0 = time.time()
 
     def tick(msg):
@@ -318,6 +325,29 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
             nodes[addr]["entity_category"] = cat
             nodes[addr]["entity_source"] = src
 
+        # Fiat valuation at each flow's transaction date (optional).
+        fiat_total = None
+        if fiat:
+            from .prices import price_map
+            import datetime as _dt
+            def _edate(e):
+                fs = e.get("first_seen")
+                if not fs:
+                    return None
+                try:
+                    return _dt.date.fromisoformat(fs[:10])
+                except ValueError:
+                    return None
+            pm = price_map(cur, fiat.upper(), [_edate(e) for e in edges])
+            fiat_total = 0.0
+            for e in edges:
+                d = _edate(e)
+                pr = pm.get(d) if d else None
+                e["value_fiat"] = round(e["value_btc"] * pr, 2) if pr else None
+                if e["value_fiat"]:
+                    fiat_total += e["value_fiat"]
+            tick(f"valued flows in {fiat.upper()} (prices for {len(pm)} dates found)")
+
         try:
             cur.execute("SELECT max(height) FROM blockchain.block_jobs;")
             tip_height = cur.fetchone()[0]
@@ -332,7 +362,10 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
             "tip": f"db height {tip_height}" if tip_height is not None else "unknown",
             "params": {"depth": depth, "fanout": fanout, "max_nodes": max_nodes,
                        "direction": direction, "clustering": cluster,
+                       "fiat": fiat.upper() if fiat else None,
                        "hub_threshold": HUB_UTXO_THRESHOLD},
+            "fiat_currency": fiat.upper() if fiat else None,
+            "fiat_flow_total": round(fiat_total, 2) if fiat_total is not None else None,
             "origin_summary": {
                 "total_received_btc": o["total_received_btc"],
                 "total_sent_btc": o["total_sent_btc"],
@@ -405,14 +438,20 @@ def write_xlsx(graph, path, title="Bitcoin address trace"):
                    round(n["total_received_btc"], 8), round(n["total_sent_btc"], 8)])
 
     ws = wb.create_sheet("Flows (edges)")
-    ws.append(["from", "to", "dir", "attribution", "est_value_btc", "tx_count", "confidence",
-               "returns_to_owner", "first_seen", "last_seen"])
+    fiat_cur = graph.get("fiat_currency")
+    hdr = ["from", "to", "dir", "attribution", "est_value_btc"]
+    if fiat_cur:
+        hdr.append(f"est_value_{fiat_cur}")
+    hdr += ["tx_count", "confidence", "returns_to_owner", "first_seen", "last_seen"]
+    ws.append(hdr)
     for c in ws[1]:
         c.font = bold
     for e in sorted(graph["edges"], key=lambda x: -x["value_btc"]):
-        ws.append([e["from"], e["to"], e["dir"], e["attribution"], round(e["value_btc"], 8),
-                   e["tx_count"], e["confidence"], e["returns_to_owner"],
-                   e["first_seen"], e["last_seen"]])
+        row = [e["from"], e["to"], e["dir"], e["attribution"], round(e["value_btc"], 8)]
+        if fiat_cur:
+            row.append(e.get("value_fiat"))
+        row += [e["tx_count"], e["confidence"], e["returns_to_owner"], e["first_seen"], e["last_seen"]]
+        ws.append(row)
 
     ws = wb.create_sheet("Origin incoming")
     ws.append(["funder_address", "value_btc", "tx_count", "same_owner", "first_seen", "last_seen"])
@@ -442,15 +481,18 @@ def write_html(graph, path, title="Bitcoin address trace report"):
         "origin": graph["origin"],
         "generated": graph["generated"],
         "tip": graph.get("tip", "unknown"),
+        "direction": graph["params"]["direction"],
         "explorer": "https://mempool.space",
         "nodes": [{"id": n["address"], "depth": n["depth"], "side": n["side"],
                    "origin": n["is_origin"], "hub": n["is_hub"], "owner": n["same_owner"],
                    "entity": n.get("entity"), "etype": n.get("entity_category"),
                    "recv": round(n["total_received_btc"], 6),
                    "sent": round(n["total_sent_btc"], 6)} for n in graph["nodes"]],
+        "fiat": graph.get("fiat_currency"),
         "edges": [{"s": e["from"], "t": e["to"], "v": round(e["value_btc"], 6),
                    "n": e["tx_count"], "when": when(e), "dir": e["dir"],
-                   "loop": e["returns_to_owner"], "cert": e["certain"]}
+                   "loop": e["returns_to_owner"], "cert": e["certain"],
+                   "vf": e.get("value_fiat")}
                   for e in graph["edges"]],
     }
     html = TEMPLATE.replace("__DATA__", json.dumps(data))
@@ -476,7 +518,7 @@ def cmd_trace(args, cfg):
     try:
         graph = build_graph(cfg, origin, args.depth, args.fanout, args.max_nodes,
                             direction=args.direction, cluster=not args.no_cluster,
-                            timeout=args.timeout, max_utxos=args.max_utxos)
+                            timeout=args.timeout, max_utxos=args.max_utxos, fiat=args.fiat)
     except psycopg.errors.QueryCanceled:
         print(f"the origin's own query timed out ({args.timeout}s). The address is very "
               f"busy or the cache is cold (e.g. just after a backup). Retry (cache warms), "
@@ -490,6 +532,9 @@ def cmd_trace(args, cfg):
     print(f"  related wallets (same owner): {s['related_wallets']} "
           f"(origin cluster {s['cluster_size']}), round-trips to owner: {s['round_trips_to_owner']}"
           + ("  [hit node cap]" if s["capped"] else ""))
+    if graph.get("fiat_flow_total") is not None:
+        print(f"  fiat: flows total ~{graph['fiat_flow_total']:,.2f} {graph['fiat_currency']} "
+              f"(valued at each tx's date)")
     if s.get("query_timeouts"):
         print(f"  note: {s['query_timeouts']} node(s) skipped on query timeout "
               f"(busy/cold-cache); partial graph written. Retry to warm cache or raise --timeout.")
