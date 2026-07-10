@@ -85,20 +85,27 @@ async def _sample_early_blocks(cfg: Config, conn, lines: List[str]):
 
     lines.append(f"{'height':>8}  {'txs_in_db':>9}  {'out_rows':>8}  {'in_rows':>7}  job(vout/vin)")
     with conn.cursor() as cur:
+        # Time-box each row: on a cold cache the per-tx subqueries can be slow,
+        # and this sample is a nicety, not core. Degrade gracefully.
+        cur.execute("SET statement_timeout = '8s';")
         for h, bh in hashes.items():
-            cur.execute("""
-                SELECT COUNT(*),
-                       COALESCE(SUM((SELECT COUNT(*) FROM blockchain.transaction_io i
-                                     WHERE i.txid = t.txid AND i.io_type = 'out')), 0),
-                       COALESCE(SUM((SELECT COUNT(*) FROM blockchain.transaction_io i
-                                     WHERE i.txid = t.txid AND i.io_type = 'in')), 0)
-                FROM blockchain.transactions t WHERE t.block_hash = %s;
-            """, (bh,))
-            txs, outs, ins = cur.fetchone()
-            cur.execute("SELECT vout_status, vin_status FROM blockchain.block_jobs WHERE height = %s;", (h,))
-            row = cur.fetchone()
-            job = f"{row[0]}/{row[1]}" if row else "no job row"
-            lines.append(f"{h:>8}  {txs:>9}  {outs:>8}  {ins:>7}  {job}")
+            try:
+                cur.execute("""
+                    SELECT COUNT(*),
+                           COALESCE(SUM((SELECT COUNT(*) FROM blockchain.transaction_io i
+                                         WHERE i.txid = t.txid AND i.io_type = 'out')), 0),
+                           COALESCE(SUM((SELECT COUNT(*) FROM blockchain.transaction_io i
+                                         WHERE i.txid = t.txid AND i.io_type = 'in')), 0)
+                    FROM blockchain.transactions t WHERE t.block_hash = %s;
+                """, (bh,))
+                txs, outs, ins = cur.fetchone()
+                cur.execute("SELECT vout_status, vin_status FROM blockchain.block_jobs WHERE height = %s;", (h,))
+                row = cur.fetchone()
+                job = f"{row[0]}/{row[1]}" if row else "no job row"
+                lines.append(f"{h:>8}  {txs:>9}  {outs:>8}  {ins:>7}  {job}")
+            except psycopg.errors.QueryCanceled:
+                lines.append(f"{h:>8}  (skipped: query timed out on cold cache)")
+        cur.execute("SET statement_timeout = DEFAULT;")
 
 
 def run_diagnose(cfg: Config) -> str:
@@ -239,15 +246,20 @@ def run_diagnose(cfg: Config) -> str:
 
         lines.append("")
         lines.append("known early addresses in transaction_io:")
+        cur.execute("SET statement_timeout = '10s';")
         for addr, desc in KNOWN_EARLY_ADDRESSES:
-            cur.execute("""
-                SELECT COUNT(*), COALESCE(SUM(amount), 0)
-                FROM blockchain.transaction_io
-                WHERE address = %s AND io_type = 'out';
-            """, (addr,))
-            count, sats = cur.fetchone()
-            status = f"{count} out-rows, {sats:,} sats" if count else "ABSENT"
+            try:
+                cur.execute("""
+                    SELECT COUNT(*), COALESCE(SUM(amount), 0)
+                    FROM blockchain.transaction_io
+                    WHERE address = %s AND io_type = 'out';
+                """, (addr,))
+                count, sats = cur.fetchone()
+                status = f"{count} out-rows, {sats:,} sats" if count else "ABSENT"
+            except psycopg.errors.QueryCanceled:
+                status = "timed out (cold cache) - query directly to confirm"
             lines.append(f"  {addr}  ({desc}): {status}")
+        cur.execute("SET statement_timeout = DEFAULT;")
         cur.execute("""
             SELECT COUNT(*) FROM blockchain.watch_addresses
             WHERE first_seen IS NOT NULL AND first_seen < '2011-01-01';

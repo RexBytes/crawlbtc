@@ -33,6 +33,12 @@ The `spends` PK is (prev_txid, prev_vout) and IS used - leave it.
 Once the database is complete, the node is only a feed for new blocks.
 A pruned node serves tip-following extraction fine.
 
+> BEFORE pruning, read `extraction-completeness.md`. Pruning permanently
+> discards any block data crawlbtc has not already extracted (OP_RETURN
+> payloads, tx metadata, raw scripts, etc.). If you may ever want those,
+> extend extraction and do a full re-extract pass FIRST - it cannot be
+> done after the blocks are gone without a full chain re-sync.
+
 Trade-offs (accept before doing this):
 - `txindex` must be disabled (incompatible with pruning).
 - `crawlbtc requeue` + re-extract of OLD blocks becomes impossible without

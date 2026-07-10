@@ -1,0 +1,9 @@
+address,entity_name,category,confidence,reference
+# Starter entity list — widely-reported public addresses. Illustrative, not
+# exhaustive; VERIFY before evidentiary reliance. For comprehensive coverage
+# import GraphSense tagpacks or a commercial feed via `crawlbtc tags import`.
+34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo,Binance,exchange,0.9,widely reported Binance cold wallet
+bc1qgdjqv0av3q56jvd82tkdjpy7gdp9ut8tlqmgrpmv24sq90ecnvqqjwvw97,Bitfinex,exchange,0.8,reported Bitfinex cold wallet
+3D2oetdNuZUqQHPJmcMDDHYoqkyNVsFk9r,Bitfinex,exchange,0.7,reported Bitfinex wallet
+1P5ZEDWTKTFGxQjZphgWPQUpe554WKDfHQ,Binance,exchange,0.6,reported Binance hot wallet
+bc1qjh0akslml59uuczddqu0y4p3vj64hg5w4h5akx,Bitfinex,exchange,0.6,reported Bitfinex hot wallet

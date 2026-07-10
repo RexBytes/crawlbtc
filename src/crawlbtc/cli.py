@@ -115,6 +115,21 @@ def cmd_config(args, cfg):
     _cmd_config(args, cfg)
 
 
+def cmd_backup(args, cfg):
+    from .backup import cmd_backup as _cmd_backup
+    _cmd_backup(args, cfg)
+
+
+def cmd_trace(args, cfg):
+    from .trace import cmd_trace as _cmd_trace
+    _cmd_trace(args, cfg)
+
+
+def cmd_tags(args, cfg):
+    from .tags import cmd_tags as _cmd_tags
+    _cmd_tags(args, cfg)
+
+
 _BLOCK_FEATURES = {"vin", "vout", "both", "none", "op_return_only", "coinbase_only"}
 
 
@@ -247,6 +262,19 @@ def cmd_build_balances(args, cfg):
     full-chain database this is a big batch job - expect hours, and make
     sure there is temp disk headroom for the aggregation spill.
     """
+    try:
+        _run_build_balances(cfg, args)
+    except psycopg.errors.InsufficientPrivilege as e:
+        print(f"\npermission denied: {e}", file=sys.stderr)
+        print("build-balances creates and truncates blockchain.address_balances, which "
+              "requires the schema OWNER (usually pgadmin), not the app role.", file=sys.stderr)
+        print("run it as the owner, e.g.:", file=sys.stderr)
+        print("  PG_USER=pgadmin PG_PASSWORD=... crawlbtc build-balances --work-mem 8GB",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+def _run_build_balances(cfg, args):
     with _connect(cfg) as conn:
         cur = conn.cursor()
         cur.execute("""
@@ -357,6 +385,51 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("recompute-balances",
                        help="exact rebuild of watch_addresses balances from io/spends data")
     p.set_defaults(func=cmd_recompute_balances, needs_probe=False)
+
+    p = sub.add_parser("trace",
+                       help="follow value outward from an address -> interactive HTML + Excel")
+    p.add_argument("address", help="starting bitcoin address")
+    p.add_argument("--direction", choices=["out", "in", "both"], default="out",
+                   help="follow value outgoing (default), incoming (provenance), or both")
+    p.add_argument("--depth", type=int, default=3, help="hops to expand (default 3)")
+    p.add_argument("--fanout", type=int, default=10,
+                   help="max counterparties kept per address, by value (default 10)")
+    p.add_argument("--max-nodes", type=int, default=750,
+                   help="hard cap on addresses in the graph (default 750)")
+    p.add_argument("--no-cluster", action="store_true",
+                   help="skip common-input related-wallet detection")
+    p.add_argument("--out", default=None, help="output directory (default: current dir)")
+    p.set_defaults(func=cmd_trace, needs_probe=False)
+
+    p = sub.add_parser("tags", help="manage the known-entity reference table (OFAC, exchanges, custom)")
+    p.add_argument("action", choices=["import-ofac", "load-builtin", "import", "add",
+                                      "remove", "list", "count"])
+    p.add_argument("rest", nargs="*", help="positional args for add/remove")
+    p.add_argument("--file", default=None, help="input file (import / import-ofac)")
+    p.add_argument("--url", default=None, help="OFAC SDN url override (import-ofac)")
+    p.add_argument("--source", default=None, help="source label for import/add")
+    p.add_argument("--category", default=None, help="category for import")
+    p.add_argument("--confidence", type=float, default=0.8, help="confidence for import/add")
+    p.add_argument("--all", action="store_true", help="import-ofac: all chains, not just Bitcoin")
+    p.add_argument("--search", default=None, help="list: filter by address/name substring")
+    p.add_argument("--limit", type=int, default=100, help="list: max rows")
+    p.set_defaults(func=cmd_tags, needs_probe=False)
+
+    p = sub.add_parser("backup",
+                       help="consistent evidence-grade dump of the blockchain schema + manifest")
+    p.add_argument("action", nargs="?", choices=["create", "verify"], default="create",
+                   help="create (default) or verify an existing dump")
+    p.add_argument("path", nargs="?", default=None,
+                   help="create: output dir (a blockchain_<timestamp> subdir is made); "
+                        "verify: the dump dir to check")
+    p.add_argument("--jobs", type=int, default=4, help="parallel pg_dump/pg_restore jobs (default 4)")
+    p.add_argument("--compress", type=int, default=6, help="dump compression level 0-9 (default 6)")
+    p.add_argument("--include-derived", action="store_true",
+                   help="also dump address_balances (default: excluded, rebuildable)")
+    p.add_argument("--no-checksum", action="store_true",
+                   help="skip SHA-256 of dump files (faster, but not verifiable)")
+    p.add_argument("--pg-user", default=None, help="override PG role for the dump (e.g. pgadmin)")
+    p.set_defaults(func=cmd_backup, needs_probe=False)
 
     p = sub.add_parser("build-balances",
                        help="materialize balances for EVERY address into blockchain.address_balances")

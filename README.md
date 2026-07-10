@@ -91,10 +91,22 @@ crawlbtc config             # show every config source (env file, bitcoin.conf, 
 crawlbtc config backup      # snapshot those configs to a timestamped dir
 crawlbtc config restore DIR # restore env/bitcoin.conf (dry-run; add --force to write)
 
+crawlbtc backup /mnt/qnap/pgdump      # consistent schema dump + provenance manifest
+crawlbtc backup verify DIR            # re-check a dump against its manifest checksums
+
 crawlbtc backfill-vins      # repair pass (only needed for verbosity-2 nodes / legacy data)
 crawlbtc requeue --phase vout --skipped     # reset blocks for reprocessing
 crawlbtc recompute-balances                 # exact watch_addresses rebuild from io/spends
 crawlbtc build-balances     # materialize EVERY address's balance into blockchain.address_balances
+
+crawlbtc trace <address>    # follow value outward -> interactive HTML graph + Excel + JSON
+                            #   --depth 3 --fanout 10 --max-nodes 750 --out DIR
+
+crawlbtc tags import-ofac   # load OFAC SDN sanctioned crypto addresses
+crawlbtc tags load-builtin  # load the shipped starter exchange list
+crawlbtc tags import --file f.csv --source graphsense   # bulk import (address,name,category)
+crawlbtc tags add <addr> "<name>" <category> --source user
+crawlbtc tags list|count|remove                         # entity_tags is flagged by `source`
 ```
 
 `-P/--processes`, `-w/--workers`, `-b/--batch-size` override the auto-sizing
@@ -146,6 +158,10 @@ A full-chain database is several TB. When space gets tight, see
 [docs/reclaiming-space.md](docs/reclaiming-space.md) for ordered,
 tested-tradeoff measures (unused PK indexes ~250 GB, node pruning
 ~700 GB, txid bytea conversion ~1.5-2 TB) and the preconditions for each.
+
+For backup planning (what to back up, what not to, and why a logical dump
+is far smaller than the live DB), see
+[docs/backup-strategy.md](docs/backup-strategy.md).
 
 ## 🧪 Tests
 
