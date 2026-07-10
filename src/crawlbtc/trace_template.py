@@ -170,6 +170,11 @@ function entities(el){const g=shaped();const flagged=g.nodes.filter(n=>n.entity)
  el.innerHTML='<div class="note">Addresses matched against a known-entity list (exchanges, mixers, sanctioned/OFAC). Unflagged = unlabelled, not necessarily clean. Risk = worst entity type on the path from origin.</div>'+
   (Object.keys(byType).length?Object.entries(byType).map(([t,list])=>`<h3><span class="badge b-${t}">${t.toUpperCase()}</span></h3><table><tr><th>entity</th><th>address(es)</th><th>BTC in</th></tr>`+
    list.map(n=>{const v=g.edges.filter(e=>e.t===n.id).reduce((a,e)=>a+e.v,0);return `<tr><td>${n.entity}${n.members&&n.members.length>1?` <span class=muted>(${n.members.length} addrs)</span>`:''}</td><td>${alink(n.id)}</td><td>${fmt(v)}</td></tr>`;}).join('')+'</table>').join(''):'<p class=muted>No flagged entities in this direction.</p>');
+ const svc=g.nodes.filter(n=>n.svc&&!n.entity);
+ if(svc.length){el.innerHTML+='<h3>Likely services (by graph shape, no tag)</h3>'+
+  '<div class="note">Inferred from in/out degree in this trace - not a confirmed identity. exchange-like = many distinct senders and receivers; collector = deposit aggregation; distributor = batch payout.</div>'+
+  '<table><tr><th>guess</th><th>address</th><th>in / out</th><th>BTC in</th></tr>'+
+  svc.sort((a,b)=>(b.in_degree+b.out_degree)-(a.in_degree+a.out_degree)).map(n=>{const v=g.edges.filter(e=>e.t===n.id).reduce((a,e)=>a+e.v,0);return `<tr><td><span class="badge b-exchange">${n.svc}</span></td><td>${alink(n.id)}</td><td class=muted>${n.in_degree||0} / ${n.out_degree||0}</td><td>${fmt(v)}</td></tr>`;}).join('')+'</table>';}
 }
 function timeline(el){const g=shaped();const byM={};g.edges.forEach(e=>{if(e.when)byM[e.when]=(byM[e.when]||0)+e.v;});
  const months=Object.keys(byM).sort();if(!months.length){el.innerHTML='<p class=muted>no dated flows</p>';return;}

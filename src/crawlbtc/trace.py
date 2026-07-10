@@ -325,6 +325,29 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
             nodes[addr]["entity_category"] = cat
             nodes[addr]["entity_source"] = src
 
+        # #9 topological service detection: label likely services by graph shape
+        # alone (no tag needed), from in/out degree within the traced subgraph
+        # plus the global hub flag. Never overrides a known-entity tag.
+        from collections import defaultdict as _dd
+        indeg, outdeg = _dd(set), _dd(set)
+        for e in edges:
+            outdeg[e["from"]].add(e["to"])
+            indeg[e["to"]].add(e["from"])
+        for addr, n in nodes.items():
+            ins, outs = len(indeg.get(addr, ())), len(outdeg.get(addr, ()))
+            n["in_degree"], n["out_degree"] = ins, outs
+            guess = None
+            if ins >= 8 and outs >= 8:
+                guess = "exchange-like"          # many distinct senders and receivers
+            elif ins >= 12 and outs <= 2:
+                guess = "collector"              # deposit aggregation (many in, few out)
+            elif outs >= 12 and ins <= 2:
+                guess = "distributor"            # batch payout (few in, many out)
+            elif n.get("is_hub"):
+                guess = "service"                # global high-UTXO hub
+            if guess and not n.get("entity"):
+                n["service_guess"] = guess
+
         # Fiat valuation at each flow's transaction date (optional).
         fiat_total = None
         if fiat:
@@ -429,12 +452,13 @@ def write_xlsx(graph, path, title="Bitcoin address trace"):
 
     ws = wb.create_sheet("Nodes")
     ws.append(["address", "level", "side", "is_origin", "same_owner", "entity",
-               "category", "is_hub", "total_received_btc", "total_sent_btc"])
+               "category", "service_guess", "is_hub", "total_received_btc", "total_sent_btc"])
     for c in ws[1]:
         c.font = bold
     for n in sorted(graph["nodes"], key=lambda x: (x["level"], -x["total_received_btc"])):
         ws.append([n["address"], n["level"], n["side"], n["is_origin"], n["same_owner"],
-                   n.get("entity", ""), n.get("entity_category", ""), n["is_hub"],
+                   n.get("entity", ""), n.get("entity_category", ""),
+                   n.get("service_guess", ""), n["is_hub"],
                    round(n["total_received_btc"], 8), round(n["total_sent_btc"], 8)])
 
     ws = wb.create_sheet("Flows (edges)")
@@ -486,6 +510,8 @@ def write_html(graph, path, title="Bitcoin address trace report"):
         "nodes": [{"id": n["address"], "depth": n["depth"], "side": n["side"],
                    "origin": n["is_origin"], "hub": n["is_hub"], "owner": n["same_owner"],
                    "entity": n.get("entity"), "etype": n.get("entity_category"),
+                   "svc": n.get("service_guess"),
+                   "in_degree": n.get("in_degree", 0), "out_degree": n.get("out_degree", 0),
                    "recv": round(n["total_received_btc"], 6),
                    "sent": round(n["total_sent_btc"], 6)} for n in graph["nodes"]],
         "fiat": graph.get("fiat_currency"),
