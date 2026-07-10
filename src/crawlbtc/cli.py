@@ -328,6 +328,11 @@ def cmd_build_clusters(args, cfg):
     _cmd(args, cfg)
 
 
+def cmd_analyze_tx(args, cfg):
+    from .analysis import cmd_analyze_tx as _cmd
+    _cmd(args, cfg)
+
+
 def cmd_recompute_balances(args, cfg):
     """Exact rebuild of watch_addresses balances from transaction_io + spends.
 
@@ -478,6 +483,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--work-mem", default="1GB", metavar="SIZE",
                    help="session work_mem for the recompute (default 1GB)")
     p.set_defaults(func=cmd_update_balances, needs_probe=False)
+
+    p = sub.add_parser("analyze-tx",
+                       help="forensic breakdown of one transaction (change, coin age, entropy, shape)")
+    p.add_argument("txid", help="transaction id to analyze")
+    p.add_argument("--json", action="store_true", help="emit JSON instead of a human summary")
+    p.add_argument("--timeout", type=int, default=30,
+                   help="per-query timeout in seconds (default 30)")
+    p.set_defaults(func=cmd_analyze_tx, needs_probe=False)
 
     p = sub.add_parser("build-clusters",
                        help="build global common-input wallet clusters (address_clusters)")
