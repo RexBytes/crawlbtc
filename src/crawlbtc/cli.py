@@ -333,6 +333,11 @@ def cmd_analyze_tx(args, cfg):
     _cmd(args, cfg)
 
 
+def cmd_correlate(args, cfg):
+    from .correlate import cmd_correlate as _cmd
+    _cmd(args, cfg)
+
+
 def cmd_recompute_balances(args, cfg):
     """Exact rebuild of watch_addresses balances from transaction_io + spends.
 
@@ -491,6 +496,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=int, default=30,
                    help="per-query timeout in seconds (default 30)")
     p.set_defaults(func=cmd_analyze_tx, needs_probe=False)
+
+    p = sub.add_parser("correlate",
+                       help="bridge a value break by amount+timing (candidate leads across a mixer/exchange)")
+    p.add_argument("--txid", default=None, help="seed from this transaction's output")
+    p.add_argument("--vout", type=int, default=None, help="output index for --txid")
+    p.add_argument("--amount", default=None, help="seed value in BTC (with --after)")
+    p.add_argument("--after", default=None, help="seed time YYYY-MM-DD[THH:MM:SS] (with --amount)")
+    p.add_argument("--window-hours", type=float, default=48.0,
+                   help="how long after the seed to search (default 48)")
+    p.add_argument("--tolerance-pct", type=float, default=1.0,
+                   help="amount match tolerance percent (default 1.0)")
+    p.add_argument("--limit", type=int, default=50, help="max candidates (default 50)")
+    p.add_argument("--timeout", type=int, default=120, help="query timeout seconds (default 120)")
+    p.add_argument("--json", action="store_true", help="emit JSON")
+    p.set_defaults(func=cmd_correlate, needs_probe=False)
 
     p = sub.add_parser("build-clusters",
                        help="build global common-input wallet clusters (address_clusters)")
