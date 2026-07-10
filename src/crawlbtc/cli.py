@@ -323,6 +323,11 @@ def cmd_update_balances(args, cfg):
     _cmd(args, cfg)
 
 
+def cmd_build_clusters(args, cfg):
+    from .clusters import cmd_build_clusters as _cmd
+    _cmd(args, cfg)
+
+
 def cmd_recompute_balances(args, cfg):
     """Exact rebuild of watch_addresses balances from transaction_io + spends.
 
@@ -473,6 +478,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--work-mem", default="1GB", metavar="SIZE",
                    help="session work_mem for the recompute (default 1GB)")
     p.set_defaults(func=cmd_update_balances, needs_probe=False)
+
+    p = sub.add_parser("build-clusters",
+                       help="build global common-input wallet clusters (address_clusters)")
+    p.add_argument("--max-iterations", type=int, default=30,
+                   help="label-propagation passes per run; re-run to continue (default 30)")
+    p.add_argument("--work-mem", default="1GB", metavar="SIZE",
+                   help="session work_mem for the propagation passes (default 1GB)")
+    p.add_argument("--reset", action="store_true", help="truncate and rebuild from scratch")
+    p.add_argument("--lookup", metavar="ADDRESS", default=None,
+                   help="print the wallet cluster an address belongs to")
+    p.add_argument("--stats", action="store_true", help="print cluster summary statistics")
+    p.set_defaults(func=cmd_build_clusters, needs_probe=False)
 
     return parser
 

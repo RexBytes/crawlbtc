@@ -148,6 +148,15 @@ CREATE TABLE IF NOT EXISTS blockchain.btc_prices (
 );
 CREATE INDEX IF NOT EXISTS btc_prices_currency_idx ON blockchain.btc_prices (currency, ts);
 
+-- Global wallet clusters (common-input-ownership), built by
+-- `crawlbtc build-clusters`. address -> canonical (smallest) cluster address.
+CREATE TABLE IF NOT EXISTS blockchain.address_clusters (
+    address    text PRIMARY KEY,
+    cluster_id text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS address_clusters_cid_idx
+    ON blockchain.address_clusters (cluster_id);
+
 -- Incremental-balance watermark (see `crawlbtc update-balances`): the
 -- fully-processed height that a materialized table is exact up to.
 CREATE TABLE IF NOT EXISTS blockchain.balance_watermark (
