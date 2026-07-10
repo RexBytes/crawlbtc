@@ -398,6 +398,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="hard cap on addresses in the graph (default 750)")
     p.add_argument("--no-cluster", action="store_true",
                    help="skip common-input related-wallet detection")
+    p.add_argument("--timeout", type=int, default=60,
+                   help="per-query timeout in seconds; slow nodes skip, not abort (default 60)")
     p.add_argument("--report-title", default=None,
                    help="title shown on the report (default: neutral, no tool branding)")
     p.add_argument("--out", default=None, help="output directory (default: current dir)")

@@ -125,7 +125,7 @@ def _entity_lookup(cur, addresses):
                      confidence DESC NULLS LAST;
         """, (list(addresses),))
         return {a: (name, cat, src) for a, name, cat, src in cur.fetchall()}
-    except psycopg.errors.UndefinedTable:
+    except (psycopg.errors.UndefinedTable, psycopg.errors.QueryCanceled):
         return {}
 
 
@@ -171,10 +171,11 @@ def _origin_cluster(cur, origin, tx_cap=3000, addr_cap=8000):
         return {origin}
 
 
-def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=True):
+def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=True,
+                timeout=60):
     with _connect(cfg) as conn:
         cur = conn.cursor()
-        cur.execute("SET statement_timeout = '120s';")
+        cur.execute(f"SET statement_timeout = '{int(timeout)}s';")
 
         nodes = {}
         edges = []
@@ -182,9 +183,15 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
 
         cluster_addrs = _origin_cluster(cur, origin) if cluster else {origin}
 
+        timeouts = [0]
+
         def ensure_node(addr, d, side):
             if addr not in nodes:
-                recv, sent = _addr_totals(cur, addr)
+                try:
+                    recv, sent = _addr_totals(cur, addr)
+                except psycopg.errors.QueryCanceled:
+                    timeouts[0] += 1
+                    recv, sent = 0, 0
                 nodes[addr] = {
                     "address": addr, "depth": abs(d), "side": side,
                     "level": 0 if addr == origin else (abs(d) if side == "out" else -abs(d)),
@@ -206,10 +213,17 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
                 if addr in seen or d >= depth:
                     continue
                 seen.add(addr)
-                if _utxo_count(cur, addr) > HUB_UTXO_THRESHOLD and addr != origin:
-                    nodes[addr]["is_hub"] = True
+                # Any slow query on a busy address hits statement_timeout;
+                # skip that node instead of aborting the whole trace.
+                try:
+                    if _utxo_count(cur, addr) > HUB_UTXO_THRESHOLD and addr != origin:
+                        nodes[addr]["is_hub"] = True
+                        continue
+                    rows = (_outgoing_edges if dir_ == "out" else _incoming_edges)(cur, addr, fanout)
+                except psycopg.errors.QueryCanceled:
+                    timeouts[0] += 1
+                    nodes[addr]["timed_out"] = True
                     continue
-                rows = (_outgoing_edges if dir_ == "out" else _incoming_edges)(cur, addr, fanout)
                 if len(rows) >= fanout:
                     nodes[addr]["truncated"] = True
                 for other, est_value, tx_count, first_seen, last_seen in rows:
@@ -243,11 +257,16 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
             expand("in")
 
         # Origin's immediate funders, for the incoming-context panel.
+        try:
+            inc_rows = _incoming_edges(cur, origin, fanout)
+        except psycopg.errors.QueryCanceled:
+            timeouts[0] += 1
+            inc_rows = []
         origin_incoming = [{
             "address": fr, "value_btc": (v or 0) / SATS, "tx_count": tc,
             "first_seen": str(fs) if fs else None, "last_seen": str(ls) if ls else None,
             "same_owner": fr in cluster_addrs,
-        } for fr, v, tc, fs, ls in _incoming_edges(cur, origin, fanout)]
+        } for fr, v, tc, fs, ls in inc_rows]
 
         # Known-entity labels.
         for addr, (name, cat, src) in _entity_lookup(cur, nodes.keys()).items():
@@ -280,6 +299,7 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
                 "node_count": len(nodes),
                 "edge_count": len(edges),
                 "capped": len(nodes) >= max_nodes,
+                "query_timeouts": timeouts[0],
             },
             "nodes": list(nodes.values()),
             "edges": edges,
@@ -407,10 +427,12 @@ def cmd_trace(args, cfg):
           f"fanout={args.fanout}) ...")
     try:
         graph = build_graph(cfg, origin, args.depth, args.fanout, args.max_nodes,
-                            direction=args.direction, cluster=not args.no_cluster)
+                            direction=args.direction, cluster=not args.no_cluster,
+                            timeout=args.timeout)
     except psycopg.errors.QueryCanceled:
-        print("a query timed out (statement_timeout 120s). Try smaller --fanout/--depth, "
-              "or run when build-balances/backup are not competing for disk.", file=sys.stderr)
+        print(f"the origin's own query timed out ({args.timeout}s). The address is very "
+              f"busy or the cache is cold (e.g. just after a backup). Retry (cache warms), "
+              f"raise --timeout, or lower --fanout.", file=sys.stderr)
         sys.exit(1)
 
     s = graph["origin_summary"]
@@ -419,6 +441,9 @@ def cmd_trace(args, cfg):
     print(f"  related wallets (same owner): {s['related_wallets']} "
           f"(origin cluster {s['cluster_size']}), round-trips to owner: {s['round_trips_to_owner']}"
           + ("  [hit node cap]" if s["capped"] else ""))
+    if s.get("query_timeouts"):
+        print(f"  note: {s['query_timeouts']} node(s) skipped on query timeout "
+              f"(busy/cold-cache); partial graph written. Retry to warm cache or raise --timeout.")
 
     title = args.report_title or "Bitcoin address trace report"
     base = os.path.join(out_dir, f"{origin}_trace")
