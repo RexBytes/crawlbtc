@@ -101,6 +101,12 @@ crawlbtc build-balances     # materialize EVERY address's balance into blockchai
 
 crawlbtc trace <address>    # follow value outward -> interactive HTML graph + Excel + JSON
                             #   --depth 3 --fanout 10 --max-nodes 750 --out DIR
+
+crawlbtc tags import-ofac   # load OFAC SDN sanctioned crypto addresses
+crawlbtc tags load-builtin  # load the shipped starter exchange list
+crawlbtc tags import --file f.csv --source graphsense   # bulk import (address,name,category)
+crawlbtc tags add <addr> "<name>" <category> --source user
+crawlbtc tags list|count|remove                         # entity_tags is flagged by `source`
 ```
 
 `-P/--processes`, `-w/--workers`, `-b/--batch-size` override the auto-sizing

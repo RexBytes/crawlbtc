@@ -104,6 +104,29 @@ def _incoming_edges(cur, address, fanout):
     return cur.fetchall()
 
 
+def _entity_lookup(cur, addresses):
+    """Return {address: (entity_name, category, source)} for known entities.
+
+    Prefers sanctioned > mixer > everything else when an address has tags
+    from multiple sources. Returns {} if the entity_tags table is absent.
+    """
+    if not addresses:
+        return {}
+    try:
+        cur.execute("""
+            SELECT DISTINCT ON (address) address, entity_name, category, source
+            FROM blockchain.entity_tags
+            WHERE address = ANY(%s)
+            ORDER BY address,
+                     CASE category WHEN 'sanctioned' THEN 0 WHEN 'mixer' THEN 1
+                                   WHEN 'exchange' THEN 2 ELSE 3 END,
+                     confidence DESC NULLS LAST;
+        """, (list(addresses),))
+        return {a: (name, cat, src) for a, name, cat, src in cur.fetchall()}
+    except psycopg.errors.UndefinedTable:
+        return {}
+
+
 def _addr_totals(cur, address):
     """Total received / sent (sats) and utxo count for an address."""
     cur.execute("""
@@ -189,6 +212,13 @@ def build_graph(cfg, origin, depth, fanout, max_nodes):
                     break
                 if d + 1 < depth and to_addr != origin:
                     q.append((to_addr, d + 1))
+
+        # Attach known-entity labels to every node in the graph.
+        ents = _entity_lookup(cur, nodes.keys())
+        for addr, (name, cat, src) in ents.items():
+            nodes[addr]["entity"] = name
+            nodes[addr]["entity_category"] = cat
+            nodes[addr]["entity_source"] = src
 
         origin_totals = nodes[origin]
         return {
@@ -312,6 +342,14 @@ def cmd_trace(args, cfg):
     origin = args.address.strip()
     out_dir = os.path.abspath(os.path.expanduser(args.out or os.getcwd()))
     os.makedirs(out_dir, exist_ok=True)
+
+    # Warn about combinatorial explosion: worst case ~ fanout^depth nodes.
+    worst = args.fanout ** args.depth
+    if worst > args.max_nodes:
+        print(f"note: depth {args.depth} x fanout {args.fanout} could reach ~{worst:,} "
+              f"addresses but is capped at {args.max_nodes:,}. For deep traces lower "
+              f"--fanout (e.g. --fanout 3 --depth {args.depth} = {3**args.depth:,}) so the "
+              f"picture isn't truncated. High-degree hubs are pruned automatically.")
 
     print(f"tracing {origin} (depth={args.depth}, fanout={args.fanout}) ...")
     try:

@@ -125,6 +125,11 @@ def cmd_trace(args, cfg):
     _cmd_trace(args, cfg)
 
 
+def cmd_tags(args, cfg):
+    from .tags import cmd_tags as _cmd_tags
+    _cmd_tags(args, cfg)
+
+
 _BLOCK_FEATURES = {"vin", "vout", "both", "none", "op_return_only", "coinbase_only"}
 
 
@@ -391,6 +396,20 @@ def build_parser() -> argparse.ArgumentParser:
                    help="hard cap on addresses in the graph (default 750)")
     p.add_argument("--out", default=None, help="output directory (default: current dir)")
     p.set_defaults(func=cmd_trace, needs_probe=False)
+
+    p = sub.add_parser("tags", help="manage the known-entity reference table (OFAC, exchanges, custom)")
+    p.add_argument("action", choices=["import-ofac", "load-builtin", "import", "add",
+                                      "remove", "list", "count"])
+    p.add_argument("rest", nargs="*", help="positional args for add/remove")
+    p.add_argument("--file", default=None, help="input file (import / import-ofac)")
+    p.add_argument("--url", default=None, help="OFAC SDN url override (import-ofac)")
+    p.add_argument("--source", default=None, help="source label for import/add")
+    p.add_argument("--category", default=None, help="category for import")
+    p.add_argument("--confidence", type=float, default=0.8, help="confidence for import/add")
+    p.add_argument("--all", action="store_true", help="import-ofac: all chains, not just Bitcoin")
+    p.add_argument("--search", default=None, help="list: filter by address/name substring")
+    p.add_argument("--limit", type=int, default=100, help="list: max rows")
+    p.set_defaults(func=cmd_tags, needs_probe=False)
 
     p = sub.add_parser("backup",
                        help="consistent evidence-grade dump of the blockchain schema + manifest")

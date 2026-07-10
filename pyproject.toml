@@ -27,4 +27,4 @@ crawlbtc = "crawlbtc.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-crawlbtc = ["sql/*.sql", "sql/migrations/*.sql"]
+crawlbtc = ["sql/*.sql", "sql/migrations/*.sql", "data/*.csv"]
