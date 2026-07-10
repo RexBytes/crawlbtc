@@ -338,6 +338,21 @@ def cmd_correlate(args, cfg):
     _cmd(args, cfg)
 
 
+def cmd_detect_reorg(args, cfg):
+    from .reorg import cmd_detect_reorg as _cmd
+    _cmd(args, cfg)
+
+
+def cmd_encrypt_keys(args, cfg):
+    from .keycrypt import cmd_encrypt_keys as _cmd
+    _cmd(args, cfg)
+
+
+def cmd_decrypt_keys(args, cfg):
+    from .keycrypt import cmd_decrypt_keys as _cmd
+    _cmd(args, cfg)
+
+
 def cmd_recompute_balances(args, cfg):
     """Exact rebuild of watch_addresses balances from transaction_io + spends.
 
@@ -496,6 +511,29 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=int, default=30,
                    help="per-query timeout in seconds (default 30)")
     p.set_defaults(func=cmd_analyze_tx, needs_probe=False)
+
+    p = sub.add_parser("encrypt-keys",
+                       help="encrypt watch_addresses private keys in place (passphrase-protected)")
+    p.add_argument("--passphrase", default=None,
+                   help="passphrase (else CRAWLBTC_KEY_PASSPHRASE env, else prompt)")
+    p.set_defaults(func=cmd_encrypt_keys, needs_probe=False)
+
+    p = sub.add_parser("decrypt-keys",
+                       help="recover encrypted watch_addresses keys (prints them; use --write-back to persist)")
+    p.add_argument("--address", default=None, help="only this address (default: all encrypted)")
+    p.add_argument("--passphrase", default=None,
+                   help="passphrase (else CRAWLBTC_KEY_PASSPHRASE env, else prompt)")
+    p.add_argument("--write-back", action="store_true",
+                   help="write plaintext back into the DB (undoes encryption; not just print)")
+    p.set_defaults(func=cmd_decrypt_keys, needs_probe=False)
+
+    p = sub.add_parser("detect-reorg",
+                       help="find/repair orphaned blocks near the tip (compares stored vs node hashes)")
+    p.add_argument("--depth", type=int, default=20,
+                   help="how many recent heights to check (default 20)")
+    p.add_argument("--apply", action="store_true",
+                   help="delete orphaned rows and requeue divergent heights (default: dry-run)")
+    p.set_defaults(func=cmd_detect_reorg, needs_probe=False)
 
     p = sub.add_parser("correlate",
                        help="bridge a value break by amount+timing (candidate leads across a mixer/exchange)")
