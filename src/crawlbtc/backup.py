@@ -279,19 +279,22 @@ def run_verify(cfg, args):
         print("this backup was created with --no-checksum; cannot verify contents "
               "(only presence/size).")
     ok, bad, missing = 0, 0, 0
-    for entry in manifest["files"]:
+    total = len(manifest["files"])
+    for i, entry in enumerate(manifest["files"], 1):
         path = os.path.join(dump_dir, entry["path"])
+        gb = entry.get("bytes", 0) / (1024 ** 3)
+        print(f"[{i}/{total}] checking {entry['path']} ({gb:.1f} GiB)...", flush=True)
         if not os.path.isfile(path):
-            print(f"MISSING  {entry['path']}")
+            print(f"  MISSING  {entry['path']}")
             missing += 1
             continue
         if os.path.getsize(path) != entry["bytes"]:
-            print(f"SIZE     {entry['path']} (expected {entry['bytes']}, got {os.path.getsize(path)})")
+            print(f"  SIZE     {entry['path']} (expected {entry['bytes']}, got {os.path.getsize(path)})")
             bad += 1
             continue
         if entry.get("sha256"):
             if _sha256(path) != entry["sha256"]:
-                print(f"CHECKSUM {entry['path']}")
+                print(f"  CHECKSUM MISMATCH  {entry['path']}")
                 bad += 1
                 continue
         ok += 1
