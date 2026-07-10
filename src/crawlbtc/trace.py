@@ -19,6 +19,7 @@ import datetime
 import json
 import os
 import sys
+import time
 from collections import deque
 
 import psycopg
@@ -172,7 +173,13 @@ def _origin_cluster(cur, origin, tx_cap=3000, addr_cap=8000):
 
 
 def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=True,
-                timeout=60):
+                timeout=60, progress=True):
+    t0 = time.time()
+
+    def tick(msg):
+        if progress:
+            print(f"  [{time.time() - t0:5.0f}s] {msg}", file=sys.stderr, flush=True)
+
     with _connect(cfg) as conn:
         cur = conn.cursor()
         cur.execute(f"SET statement_timeout = '{int(timeout)}s';")
@@ -181,7 +188,11 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
         edges = []
         loops = []   # edges that return value to the origin's cluster (round-trips)
 
+        if cluster:
+            tick("finding origin's wallet cluster (common-input)...")
         cluster_addrs = _origin_cluster(cur, origin) if cluster else {origin}
+        if cluster:
+            tick(f"cluster: {len(cluster_addrs)} address(es) probably same owner")
 
         timeouts = [0]
 
@@ -206,6 +217,7 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
         ensure_node(origin, 0, "origin")
 
         def expand(dir_):
+            tick(f"expanding {dir_}going flow, depth {depth} ...")
             q = deque([(origin, 0)])
             seen = set()
             while q:
@@ -213,6 +225,8 @@ def build_graph(cfg, origin, depth, fanout, max_nodes, direction="out", cluster=
                 if addr in seen or d >= depth:
                     continue
                 seen.add(addr)
+                tick(f"{dir_} L{d} | {len(nodes)} nodes, {len(edges)} flows, "
+                     f"queue {len(q)} | {addr[:16]}…")
                 # Any slow query on a busy address hits statement_timeout;
                 # skip that node instead of aborting the whole trace.
                 try:
